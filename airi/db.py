@@ -122,6 +122,31 @@ def delete_old_codes(older_than: timedelta = timedelta(days=7)) -> int:
         return cur.rowcount
 
 
+# ---------- app_config ----------
+
+def get_config(key: str) -> Optional[str]:
+    """Read one admin-configurable setting (see sql/002_app_config.sql).
+    Returns None if no row exists — callers treat that as "no override,
+    fall back to an env var / default", never as an error."""
+    with _cursor() as cur:
+        cur.execute("SELECT value FROM app_config WHERE key = %s", (key,))
+        row = cur.fetchone()
+        return row["value"] if row else None
+
+
+def set_config(key: str, value: str) -> None:
+    """Write (or overwrite) one admin-configurable setting."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (key, value),
+        )
+
+
 # ---------- users ----------
 
 def upsert_user_login(email: str) -> int:

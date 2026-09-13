@@ -470,22 +470,52 @@ stored token is still valid without repeating the OTP flow.
 
 Same request body as [`POST /analyze`](#post-analyze) (`prompt` or
 `messages`, `model`, `expected_output_tokens`), same response shape —
-plus `Authorization: Bearer <token>` required, and one extra optional
-response field:
+plus `Authorization: Bearer <token>` required, two extra optional
+request fields, and one extra optional response field:
 
 | field | meaning |
 |---|---|
-| `exact_mode_note` | present only if the real provider call failed (rate limit, outage) — the response still has valid data, just from the heuristic fallback, and this field says so honestly instead of silently mislabeling it |
+| `anthropic_api_key` (request, optional) | your own Anthropic key — used only in BYOK mode (see below); ignored in test mode; never stored |
+| `google_api_key` (request, optional) | your own Google (Gemini) key — same |
+| `exact_mode_note` (response, optional) | present only if the real provider call failed (rate limit, outage, bad BYOK key) — the response still has valid data, just from the heuristic fallback, and this field says so honestly instead of silently mislabeling it |
 
 For OpenAI models this endpoint returns exactly what `/analyze` would
 (tiktoken is already exact and free — no provider call needed). For
-Claude/Gemini models with the corresponding `ANTHROPIC_API_KEY`/
-`GOOGLE_API_KEY` configured, `method` is `"provider-api"` and
-`confidence` is `"high"`.
+Claude/Gemini models, `method` is `"provider-api"` and `confidence` is
+`"high"` when the provider call succeeds.
 
-**Errors**: `400`/`422` same as `/analyze`; `401` not signed in / session
-expired; `429` rate-limited (max 20 calls/minute per signed-in user);
-`503` Exact mode for that provider isn't configured on this deployment.
+**Which key is used** depends on this deployment's test-mode setting
+(`GET /config` → `test_mode`; full detail in
+[docs/ADMIN.md](ADMIN.md)):
+
+- **Test mode on:** AIRI's own `ANTHROPIC_API_KEY`/`GOOGLE_API_KEY`.
+  `anthropic_api_key`/`google_api_key` in the request are ignored.
+- **Test mode off (BYOK):** the request's own `anthropic_api_key` /
+  `google_api_key`, matching the model's provider. Missing the one you
+  need is a `400`, not a `503` — it's a per-caller, fixable problem.
+
+**Errors**: `400`/`422` same as `/analyze`, plus (BYOK mode only) `400`
+if the request is missing the API key for that model's provider; `401`
+not signed in / session expired; `429` rate-limited (max 20
+calls/minute per signed-in user); `503` (test mode only) Exact mode for
+that provider isn't configured on this deployment.
+
+## Admin: test mode, BYOK, and deployment config
+
+See [docs/ADMIN.md](ADMIN.md) for the concept and the password-gated
+admin page (`frontend/admin.html`). Endpoint summary:
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /config` | none | `{"test_mode": bool}` — what the Exact-flavor frontend needs to decide what to show a signed-in user |
+| `POST /admin/login` | `{"password": "..."}` in body | Returns a 12h admin token on success (`401` wrong password, `503` not configured) |
+| `GET /admin/config` | `Authorization: Bearer <admin token>` | Current `test_mode` + its `source` (`"admin"`/`"env"`/`"default"`), plus a read-only checklist of which secrets are configured |
+| `POST /admin/config` | same | Body `{"test_mode": bool}` — sets an admin override (persists in Postgres); `503` if the database isn't configured |
+
+An admin token is a distinct, shorter-lived (12h) JWT from a user's
+Exact-mode session token — `airi/auth.py` rejects either type outright
+if presented as the other, even though both are HS256-signed with the
+same `AUTH_SECRET`.
 
 ## Cold starts (demo host only)
 

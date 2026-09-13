@@ -132,6 +132,25 @@
     border-radius: 8px;
     padding: 8px 10px;
   }
+  .info-note {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 0 0 14px;
+    background: rgba(122,162,255,0.08);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .byok-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .byok-saved-chip {
+    font-size: 11px;
+    color: var(--safe);
+    background: rgba(84,214,138,0.1);
+    border: 1px solid rgba(84,214,138,0.3);
+    border-radius: 999px;
+    padding: 2px 9px;
+    white-space: nowrap;
+  }
 
   h2 { font-size: 17px; margin: 40px 0 4px; }
 
@@ -197,6 +216,7 @@
       </div>
       <div id="authStatus" class="auth-status hidden">
         <span id="authEmailLabel"></span>
+        <button type="button" id="manageKeysBtn" class="link-btn hidden">Manage keys</button>
         <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
       </div>
     </div>
@@ -223,6 +243,37 @@
         </div>
         <div id="authError2" class="error hidden"></div>
       </div>
+    </div>
+
+    <div id="testModeNote" class="panel hidden">
+      <p class="info-note" style="margin:0;">
+        This deployment is in <b style="color:var(--text);">testing mode</b> — Exact requests use
+        AIRI's own shared Anthropic/Gemini keys, so there's nothing for you to configure.
+      </p>
+    </div>
+
+    <div id="byokPanel" class="panel hidden">
+      <p class="sub" style="margin:0 0 14px;">
+        This deployment asks each signed-in user to <b style="color:var(--text);">bring their own</b>
+        Anthropic/Gemini API key for Exact mode. Your key is stored only in this browser
+        (localStorage) — it's sent to AIRI with each Exact request and used for that one
+        provider call only. AIRI never stores it server-side or logs it.
+      </p>
+      <div class="byok-row">
+        <label for="byokAnthropicInput" style="margin:0;">Anthropic API key</label>
+        <span id="byokAnthropicChip" class="byok-saved-chip hidden">saved</span>
+      </div>
+      <input id="byokAnthropicInput" type="password" placeholder="sk-ant-..." autocomplete="off" />
+      <div class="byok-row" style="margin-top:12px;">
+        <label for="byokGoogleInput" style="margin:0;">Google (Gemini) API key</label>
+        <span id="byokGoogleChip" class="byok-saved-chip hidden">saved</span>
+      </div>
+      <input id="byokGoogleInput" type="password" placeholder="AIza..." autocomplete="off" />
+      <div class="row" style="margin-top:12px;">
+        <div><button type="button" id="saveByokBtn" style="width:100%;">Save keys</button></div>
+        <div><button type="button" id="clearByokBtn" class="secondary-btn" style="width:100%;">Clear saved keys</button></div>
+      </div>
+      <div id="byokSavedMsg" class="exact-note hidden" style="color:var(--safe); background:rgba(84,214,138,0.1); border-color:rgba(84,214,138,0.3);"></div>
     </div>
 
     <h1>AIRI — AI Request Intelligence</h1>
@@ -450,11 +501,22 @@
     const headers = { "Content-Type": "application/json" };
     if (useExact) headers["Authorization"] = `Bearer ${authToken}`;
 
+    const requestBody = { prompt, model, expected_output_tokens };
+    if (useExact && testMode === false) {
+      // BYOK mode: attach whichever keys are saved in this browser. The
+      // server only uses the one matching the model's provider (or
+      // returns a clear 400 if that one's missing) — never stored,
+      // logged, or echoed back.
+      const keys = loadByokKeys();
+      if (keys.anthropic) requestBody.anthropic_api_key = keys.anthropic;
+      if (keys.google) requestBody.google_api_key = keys.google;
+    }
+
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ prompt, model, expected_output_tokens }),
+        body: JSON.stringify(requestBody),
       });
       const data = await res.json();
       if (res.status === 401 && useExact) {
@@ -511,10 +573,16 @@
 
   const AUTH_TOKEN_KEY = "airi_auth_token";
   const AUTH_EMAIL_KEY = "airi_auth_email";
+  const BYOK_ANTHROPIC_KEY = "airi_byok_anthropic_key";
+  const BYOK_GOOGLE_KEY = "airi_byok_google_key";
 
   let currentFlavor = "standard";
   let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
   let authEmail = localStorage.getItem(AUTH_EMAIL_KEY) || null;
+  // null = not loaded yet from GET /config. Until it loads, Exact stays
+  // in the OTP-only view (no BYOK nag, no premature "testing mode" claim).
+  let testMode = null;
+  let byokPanelOpen = false;
 
   const flavorStandardBtn = document.getElementById("flavorStandardBtn");
   const flavorExactBtn = document.getElementById("flavorExactBtn");
@@ -527,16 +595,83 @@
   const sendCodeBtn = document.getElementById("sendCodeBtn");
   const verifyCodeBtn = document.getElementById("verifyCodeBtn");
   const resendCodeBtn = document.getElementById("resendCodeBtn");
+  const testModeNoteEl = document.getElementById("testModeNote");
+  const byokPanelEl = document.getElementById("byokPanel");
+  const manageKeysBtn = document.getElementById("manageKeysBtn");
+
+  async function loadConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/config`);
+      const data = await res.json();
+      testMode = !!data.test_mode;
+    } catch (e) {
+      // Fail open to "testing mode" rather than blocking Exact users on a
+      // /config hiccup — worst case they see a needless note instead of
+      // a BYOK prompt they didn't need to fill in.
+      testMode = true;
+    }
+    renderExactPanels();
+  }
+
+  function loadByokKeys() {
+    return {
+      anthropic: localStorage.getItem(BYOK_ANTHROPIC_KEY) || "",
+      google: localStorage.getItem(BYOK_GOOGLE_KEY) || "",
+    };
+  }
+
+  function hasAnyByokKeyStored() {
+    const keys = loadByokKeys();
+    return !!(keys.anthropic || keys.google);
+  }
+
+  function refreshByokChips() {
+    const keys = loadByokKeys();
+    document.getElementById("byokAnthropicChip").classList.toggle("hidden", !keys.anthropic);
+    document.getElementById("byokGoogleChip").classList.toggle("hidden", !keys.google);
+  }
+
+  function openByokInputs() {
+    const keys = loadByokKeys();
+    document.getElementById("byokAnthropicInput").value = keys.anthropic;
+    document.getElementById("byokGoogleInput").value = keys.google;
+    refreshByokChips();
+  }
+
+  function renderExactPanels() {
+    const signedIn = !!authToken;
+    const inExact = currentFlavor === "exact";
+
+    authPanel.classList.toggle("hidden", !(inExact && !signedIn));
+
+    if (!inExact || !signedIn || testMode === null) {
+      testModeNoteEl.classList.add("hidden");
+      byokPanelEl.classList.add("hidden");
+      manageKeysBtn.classList.add("hidden");
+      return;
+    }
+
+    if (testMode) {
+      testModeNoteEl.classList.remove("hidden");
+      byokPanelEl.classList.add("hidden");
+      manageKeysBtn.classList.add("hidden");
+    } else {
+      testModeNoteEl.classList.add("hidden");
+      manageKeysBtn.classList.remove("hidden");
+      if (byokPanelOpen) {
+        openByokInputs();
+        byokPanelEl.classList.remove("hidden");
+      } else {
+        byokPanelEl.classList.add("hidden");
+      }
+    }
+  }
 
   function setFlavor(flavor) {
     currentFlavor = flavor;
     flavorStandardBtn.classList.toggle("active", flavor === "standard");
     flavorExactBtn.classList.toggle("active", flavor === "exact");
-    if (flavor === "exact" && !authToken) {
-      authPanel.classList.remove("hidden");
-    } else {
-      authPanel.classList.add("hidden");
-    }
+    renderExactPanels();
   }
 
   function renderAuthStatus() {
@@ -551,8 +686,12 @@
   function signOut() {
     authToken = null;
     authEmail = null;
+    byokPanelOpen = false;
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_EMAIL_KEY);
+    // BYOK keys are deliberately left in localStorage on sign-out: they
+    // belong to this browser, not this session, so signing back in
+    // shouldn't mean re-typing them.
     renderAuthStatus();
     setFlavor("standard");
   }
@@ -566,6 +705,7 @@
       authEmail = data.email;
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
       renderAuthStatus();
+      byokPanelOpen = !hasAnyByokKeyStored();
       setFlavor("exact");
     } catch (e) {
       // Stored token is stale/invalid — quietly fall back to Standard
@@ -577,6 +717,36 @@
   flavorStandardBtn.addEventListener("click", () => setFlavor("standard"));
   flavorExactBtn.addEventListener("click", () => setFlavor("exact"));
   document.getElementById("signOutBtn").addEventListener("click", signOut);
+  manageKeysBtn.addEventListener("click", () => {
+    byokPanelOpen = !byokPanelOpen;
+    renderExactPanels();
+  });
+
+  document.getElementById("saveByokBtn").addEventListener("click", () => {
+    const a = document.getElementById("byokAnthropicInput").value.trim();
+    const g = document.getElementById("byokGoogleInput").value.trim();
+    // Only overwrite a key whose field the user actually typed into —
+    // leaving one blank re-saves the other without clobbering it.
+    if (a) localStorage.setItem(BYOK_ANTHROPIC_KEY, a);
+    if (g) localStorage.setItem(BYOK_GOOGLE_KEY, g);
+    refreshByokChips();
+    const msg = document.getElementById("byokSavedMsg");
+    msg.textContent = "Saved to this browser — never sent to AIRI except with an Exact request.";
+    msg.classList.remove("hidden");
+    setTimeout(() => msg.classList.add("hidden"), 3000);
+  });
+
+  document.getElementById("clearByokBtn").addEventListener("click", () => {
+    localStorage.removeItem(BYOK_ANTHROPIC_KEY);
+    localStorage.removeItem(BYOK_GOOGLE_KEY);
+    document.getElementById("byokAnthropicInput").value = "";
+    document.getElementById("byokGoogleInput").value = "";
+    refreshByokChips();
+    const msg = document.getElementById("byokSavedMsg");
+    msg.textContent = "Cleared from this browser.";
+    msg.classList.remove("hidden");
+    setTimeout(() => msg.classList.add("hidden"), 3000);
+  });
 
   async function requestCode() {
     authError1.classList.add("hidden");
@@ -632,6 +802,7 @@
       localStorage.setItem(AUTH_TOKEN_KEY, authToken);
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
       renderAuthStatus();
+      byokPanelOpen = !hasAnyByokKeyStored();
       setFlavor("exact");
       // Reset the panel for next time (e.g. after a future sign-out).
       authStep1.classList.remove("hidden");
@@ -984,6 +1155,10 @@
   // Restore a stored Exact-mode session, if any, independently of model
   // loading below — this only touches auth state, not the dropdowns.
   checkExistingSession();
+
+  // Whether this deployment is in testing mode or expects BYOK keys —
+  // needed to decide what the Exact panel shows once someone's signed in.
+  loadConfig();
 
   // Load the real model list first, then seed the example rows — avoids a
   // flash where their dropdowns briefly only offer the "gpt-4o" fallback

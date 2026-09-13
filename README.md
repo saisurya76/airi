@@ -22,6 +22,9 @@ build intentionally skips.
   flavor (real Claude/Gemini token counts via email+OTP sign-in): why
   it's gated, why it's zero-cost even at peak traffic, and one-time
   setup (Neon, Resend, Anthropic/Google keys).
+- **[docs/ADMIN.md](docs/ADMIN.md)** — the password-gated admin page
+  (`frontend/admin.html`): the test-mode ↔ BYOK toggle for Exact mode,
+  how it's stored, and the `/config`/`/admin/*` API reference.
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
 
@@ -69,7 +72,8 @@ print(result.to_dict())
 
 Run the sanity tests any time with `python3 tests/test_analyzer.py`,
 `python3 tests/test_projector.py`, `python3 tests/test_report.py`,
-`python3 tests/test_auth.py`, and `python3 tests/test_exact_provider.py`
+`python3 tests/test_auth.py`, `python3 tests/test_exact_provider.py`,
+and `python3 tests/test_runtime_config.py`
 (the last two need no database/network — they test pure logic and
 mocked HTTP calls respectively).
 
@@ -85,16 +89,19 @@ airi/                   core library — zero web/db/cloud dependencies
   pricing.py                 cost = tokens x registry price
   registry.py                  model -> context window, price, tokenizer family, provider
   models.py                     AnalysisResult
-  auth.py                 API-layer only: OTP code hashing + JWT sessions (pure, no I/O)
-  db.py                   API-layer only: Neon/Postgres access for users + otp_codes
+  auth.py                 API-layer only: OTP code hashing + JWT sessions (pure, no I/O), incl. admin tokens
+  db.py                   API-layer only: Neon/Postgres access for users + otp_codes + app_config
   email_provider.py       API-layer only: sends the OTP email via Resend
   exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /models, /health
-frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + traffic projection + load-test demo)
+  runtime_config.py       API-layer only: test-mode/BYOK toggle (env var + admin-page override)
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /models, /health
+frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
+frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment config checklist
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
+sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode override)
 tests/                  sanity checks for every module above
-docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup)
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page)
 ```
 
 The core library never imports FastAPI, and never makes a network call
@@ -253,12 +260,17 @@ heuristic for everyone else, zero network dependency. The try-it page
 also offers an opt-in **Exact** toggle that calls Claude's and Gemini's
 own token-counting APIs directly instead of estimating — gated behind a
 one-time email code, not because the provider calls cost anything (they
-don't), but to keep AIRI's own shared API keys from being hammered by
-anonymous traffic. Fully optional, fully separate from the core library,
-and designed to run at zero cost even at peak traffic — every piece
-(Neon, Resend, the provider APIs themselves) fails safe into a pause or
-a heuristic fallback rather than ever generating a bill. See
+don't), but to keep some Anthropic/Google API key from being hammered
+by anonymous traffic. Fully optional, fully separate from the core
+library, and designed to run at zero cost even at peak traffic — every
+piece (Neon, Resend, the provider APIs themselves) fails safe into a
+pause or a heuristic fallback rather than ever generating a bill. See
 [docs/EXACT_MODE.md](docs/EXACT_MODE.md) for the full design and setup.
+
+Whose key gets used is a runtime setting: a password-gated admin page
+(`frontend/admin.html`) toggles between AIRI's own shared **testing**
+keys and requiring each signed-in user to **bring their own** key
+(BYOK) — see [docs/ADMIN.md](docs/ADMIN.md).
 
 ## Pricing & context data
 

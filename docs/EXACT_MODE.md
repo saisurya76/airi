@@ -17,14 +17,25 @@ network dependency.
 
 They are — Anthropic's `/v1/messages/count_tokens` and Google's
 Gemini `countTokens` are both genuinely free, don't consume any billed
-tokens, and never auto-charge even under heavy use. The reason Exact
-mode is login-gated isn't cost, it's that AIRI holds **its own**
-Anthropic/Google API keys server-side (not a per-user key), and those
-keys have their own rate limits (requests-per-minute) shared across
-everyone using this deployment. A one-time email code keeps that shared
-capacity from being hammered by anonymous/scripted traffic. There's no
-password, no plan tiers, nothing paywalled — it's an abuse guard, not a
-monetization gate.
+tokens, and never auto-charge even under heavy use. Sign-in exists to
+keep Exact mode from being hammered by anonymous/scripted traffic —
+not to gate a paid feature. There's no password for end users, no plan
+tiers, nothing paywalled.
+
+Exactly *whose* provider key gets used for a given Exact-mode call
+depends on one deployment-wide setting, **test mode** — see
+[docs/ADMIN.md](ADMIN.md):
+
+- **Test mode on (the default):** AIRI holds its own Anthropic/Google
+  API keys server-side (not a per-user key), and those keys have their
+  own rate limits (requests-per-minute) shared across everyone using
+  this deployment. Sign-in exists specifically to keep that shared
+  capacity from being hammered.
+- **Test mode off (BYOK):** each signed-in user supplies their own
+  Anthropic/Google key, entered client-side and sent with each Exact
+  request — AIRI never stores it. Sign-in still applies (so the
+  per-user rate limit below has an identity to key off of), but there's
+  no shared key to protect anymore.
 
 ## Why this can run at zero cost, even at peak traffic
 
@@ -78,7 +89,8 @@ domain:
 
 ### 3. Anthropic / Google API keys
 
-Server-held, shared keys — not per-user:
+Server-held, shared **testing** keys — see [docs/ADMIN.md](ADMIN.md)
+for how these relate to the test-mode/BYOK toggle:
 
 - `ANTHROPIC_API_KEY` — from console.anthropic.com. Only used for the
   free `count_tokens` endpoint; no spend risk from this integration
@@ -86,8 +98,12 @@ Server-held, shared keys — not per-user:
 - `GOOGLE_API_KEY` — from Google AI Studio. Same: only used for the
   free `countTokens` endpoint.
 
-Exact mode for a given provider simply returns a clear `503` until its
-key is set — the rest of AIRI is unaffected either way.
+While this deployment is in test mode, Exact mode for a given provider
+simply returns a clear `503` until its shared key is set — the rest of
+AIRI is unaffected either way. Once test mode is off, these vars aren't
+used at all — each signed-in user brings their own key instead (a
+missing one there is a `400`, not a `503`, since it's the caller's own
+thing to fix, not a deployment gap).
 
 ### 4. Auth secret
 
@@ -147,6 +163,13 @@ script:
 from airi.db import delete_old_codes
 delete_old_codes()  # removes rows older than 7 days by default
 ```
+
+## Admin page & BYOK
+
+The test-mode/BYOK toggle above, plus a read-only checklist of what's
+configured on this deployment, lives behind a password-gated admin
+page — see [docs/ADMIN.md](ADMIN.md) for setup and the full `/admin/*`
+API reference.
 
 ## What this does *not* change
 

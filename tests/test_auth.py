@@ -12,6 +12,8 @@ from airi.auth import (
     verify_code,
     create_session_token,
     verify_session_token,
+    create_admin_token,
+    verify_admin_token,
     extract_bearer_token,
     CODE_LENGTH,
 )
@@ -118,6 +120,65 @@ def test_session_token_expired():
         print("OK: session_token_expired ->", e)
 
 
+def test_admin_token_roundtrip():
+    token = create_admin_token(SECRET)
+    verify_admin_token(token, SECRET)  # raises on failure — no return value to check
+    print("OK: admin_token_roundtrip")
+
+
+def test_admin_token_rejects_wrong_secret():
+    token = create_admin_token(SECRET)
+    try:
+        verify_admin_token(token, "a-different-secret")
+        assert False, "should have raised"
+    except AuthError:
+        print("OK: admin_token_rejects_wrong_secret")
+
+
+def test_admin_token_rejects_empty():
+    try:
+        verify_admin_token("", SECRET)
+        assert False, "should have raised"
+    except AuthError:
+        print("OK: admin_token_rejects_empty")
+
+
+def test_admin_token_expired():
+    import jwt as pyjwt
+    now = int(time.time())
+    payload = {"sub": "admin", "role": "admin", "iat": now - 1000, "exp": now - 500}
+    expired_token = pyjwt.encode(payload, SECRET, algorithm="HS256")
+    try:
+        verify_admin_token(expired_token, SECRET)
+        assert False, "should have raised"
+    except AuthError as e:
+        assert "expired" in str(e).lower()
+        print("OK: admin_token_expired ->", e)
+
+
+def test_admin_and_user_tokens_are_not_interchangeable():
+    # The two token kinds are signed with the same secret and algorithm,
+    # so this cross-check matters: an admin token must never authenticate
+    # as a user session, and a user session token must never pass as an
+    # admin token.
+    admin_token = create_admin_token(SECRET)
+    user_token = create_session_token("user@example.com", SECRET)
+
+    try:
+        verify_session_token(admin_token, SECRET)
+        assert False, "admin token should not verify as a user session"
+    except AuthError:
+        pass
+
+    try:
+        verify_admin_token(user_token, SECRET)
+        assert False, "user session token should not verify as an admin token"
+    except AuthError:
+        pass
+
+    print("OK: admin_and_user_tokens_are_not_interchangeable")
+
+
 def test_extract_bearer_token():
     assert extract_bearer_token("Bearer abc123") == "abc123"
     for bad in [None, "", "abc123", "Basic abc123"]:
@@ -141,5 +202,10 @@ if __name__ == "__main__":
     test_session_token_rejects_wrong_secret()
     test_session_token_rejects_tampered_token()
     test_session_token_expired()
+    test_admin_token_roundtrip()
+    test_admin_token_rejects_wrong_secret()
+    test_admin_token_rejects_empty()
+    test_admin_token_expired()
+    test_admin_and_user_tokens_are_not_interchangeable()
     test_extract_bearer_token()
     print("\nAll auth sanity checks passed.")

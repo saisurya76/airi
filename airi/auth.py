@@ -29,6 +29,7 @@ CODE_LENGTH = 6
 CODE_TTL_SECONDS = 10 * 60          # a requested code is valid for 10 minutes
 MAX_VERIFY_ATTEMPTS = 5             # per code, before it's dead regardless of TTL
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # signed-in sessions last 30 days
+ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60  # admin tokens are short-lived — re-enter the password twice a day
 JWT_ALGORITHM = "HS256"
 
 
@@ -89,7 +90,11 @@ def verify_session_token(token: str, secret: str) -> str:
     except _pyjwt.InvalidTokenError:
         raise AuthError("Invalid session — sign in again.")
     email = payload.get("sub")
-    if not email:
+    if not email or payload.get("role") is not None:
+        # The `role` check keeps an admin token (see create_admin_token)
+        # from ever being accepted here, even though both are HS256 JWTs
+        # signed with the same AUTH_SECRET — the two token kinds must
+        # never be interchangeable.
         raise AuthError("Invalid session — sign in again.")
     return email
 
@@ -99,3 +104,29 @@ def extract_bearer_token(authorization_header: Optional[str]) -> str:
     if not authorization_header or not authorization_header.startswith("Bearer "):
         raise AuthError("Not signed in.")
     return authorization_header[len("Bearer "):].strip()
+
+
+def create_admin_token(secret: str) -> str:
+    """A signed JWT for the admin page — deliberately a distinct token
+    shape from a user session (carries role: admin, no email, a much
+    shorter TTL) so an admin token can never be confused with, or reused
+    as, a signed-in user's session, and vice versa."""
+    now = int(time.time())
+    payload = {"sub": "admin", "role": "admin", "iat": now, "exp": now + ADMIN_SESSION_TTL_SECONDS}
+    return _pyjwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
+
+
+def verify_admin_token(token: str, secret: str) -> None:
+    """Raises AuthError (safe to show the user) unless `token` is a valid,
+    unexpired admin token. Returns nothing — callers only need to know
+    whether it passed."""
+    if not token:
+        raise AuthError("Not signed in as admin.")
+    try:
+        payload = _pyjwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+    except _pyjwt.ExpiredSignatureError:
+        raise AuthError("Admin session expired — sign in again.")
+    except _pyjwt.InvalidTokenError:
+        raise AuthError("Invalid admin session — sign in again.")
+    if payload.get("role") != "admin":
+        raise AuthError("Invalid admin session — sign in again.")

@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Admin</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%;
+    background: #0f1115;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .row { display: flex; gap: 12px; margin-top: 14px; }
+  .row > div { flex: 1; }
+  button {
+    margin-top: 18px;
+    background: var(--accent);
+    color: #0f1115;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .secondary-btn { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .error { color: var(--exceeded); font-size: 13px; margin-top: 10px; }
+  .hidden { display: none !important; }
+
+  .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .link-btn {
+    margin: 0;
+    background: transparent;
+    color: var(--accent);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .link-btn:hover { text-decoration: underline; }
+
+  .status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .mode-pill {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 4px 12px;
+  }
+  .mode-pill.test { background: rgba(62,207,142,0.15); color: var(--safe); border: 1px solid rgba(62,207,142,0.35); }
+  .mode-pill.byok { background: rgba(242,184,75,0.15); color: var(--warning); border: 1px solid rgba(242,184,75,0.35); }
+  .source-tag { font-size: 12px; color: var(--muted); }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background-color: #2a2f3a; border-radius: 999px; transition: 0.15s;
+  }
+  .slider:before {
+    position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+    background-color: #e8e9ec; border-radius: 50%; transition: 0.15s;
+  }
+  .switch input:checked + .slider { background-color: var(--accent); }
+  .switch input:checked + .slider:before { transform: translateX(20px); }
+  .switch input:disabled + .slider { opacity: 0.5; cursor: default; }
+
+  .checklist { list-style: none; margin: 12px 0 0; padding: 0; }
+  .checklist li {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .checklist li:last-child { border-bottom: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.on { background: var(--safe); }
+  .dot.off { background: var(--exceeded); }
+  .checklist .key { color: var(--text); }
+  .checklist .desc { color: var(--muted); margin-left: auto; text-align: right; font-size: 12px; }
+
+  .saved-msg {
+    color: var(--safe);
+    font-size: 12px;
+    margin-top: 10px;
+    background: rgba(62,207,142,0.1);
+    border: 1px solid rgba(62,207,142,0.3);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <div>
+        <h1 style="margin-bottom:0;">AIRI — Admin</h1>
+        <p class="sub" style="margin:4px 0 0;">Runtime settings for this deployment.</p>
+      </div>
+      <button type="button" id="signOutBtn" class="link-btn hidden">Sign out</button>
+    </div>
+
+    <div id="loginPanel" class="panel">
+      <label for="passwordInput">Admin password</label>
+      <input id="passwordInput" type="password" placeholder="••••••••" autocomplete="current-password" />
+      <button type="button" id="loginBtn" style="width:100%;">Sign in</button>
+      <div id="loginError" class="error hidden"></div>
+    </div>
+
+    <div id="dashboardPanel" class="panel hidden">
+      <div class="status-line">
+        <div>
+          <span id="modePill" class="mode-pill test">Testing mode</span>
+          <span id="sourceTag" class="source-tag"></span>
+        </div>
+      </div>
+      <p class="sub" id="modeExplainer" style="margin:8px 0 0;"></p>
+
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">Require BYOK for Exact mode</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">Off = AIRI's shared testing keys. On = each signed-in user supplies their own key.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="byokToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="toggleError" class="error hidden"></div>
+      <div id="toggleSavedMsg" class="saved-msg hidden">Saved.</div>
+    </div>
+
+    <div id="checklistPanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">What's configured on this deployment</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">Read-only — values themselves are never shown here, only whether each is set.</p>
+      <ul class="checklist">
+        <li>
+          <span class="dot" id="dotAnthropic"></span>
+          <span class="key">ANTHROPIC_API_KEY</span>
+          <span class="desc">shared testing key</span>
+        </li>
+        <li>
+          <span class="dot" id="dotGoogle"></span>
+          <span class="key">GOOGLE_API_KEY</span>
+          <span class="desc">shared testing key</span>
+        </li>
+        <li>
+          <span class="dot" id="dotResend"></span>
+          <span class="key">RESEND_API_KEY / RESEND_FROM_EMAIL</span>
+          <span class="desc">OTP email delivery</span>
+        </li>
+        <li>
+          <span class="dot" id="dotDatabase"></span>
+          <span class="key">DATABASE_URL</span>
+          <span class="desc">auth + this settings page</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+<script>
+  // Same trick as index.html/report.html: the frontend (GitHub Pages) and
+  // API (Render) are deployed separately, so calls need an absolute URL.
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+  const ADMIN_TOKEN_KEY = "airi_admin_token";
+
+  let adminToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || null;
+  // Deliberately sessionStorage, not localStorage: an admin token is
+  // short-lived (12h) and this page is sensitive enough that "closed the
+  // tab" is a reasonable place to require the password again.
+
+  const loginPanel = document.getElementById("loginPanel");
+  const dashboardPanel = document.getElementById("dashboardPanel");
+  const checklistPanel = document.getElementById("checklistPanel");
+  const signOutBtn = document.getElementById("signOutBtn");
+  const passwordInput = document.getElementById("passwordInput");
+  const loginBtn = document.getElementById("loginBtn");
+  const loginError = document.getElementById("loginError");
+  const modePill = document.getElementById("modePill");
+  const sourceTag = document.getElementById("sourceTag");
+  const modeExplainer = document.getElementById("modeExplainer");
+  const byokToggle = document.getElementById("byokToggle");
+  const toggleError = document.getElementById("toggleError");
+  const toggleSavedMsg = document.getElementById("toggleSavedMsg");
+
+  function showSignedOut() {
+    loginPanel.classList.remove("hidden");
+    dashboardPanel.classList.add("hidden");
+    checklistPanel.classList.add("hidden");
+    signOutBtn.classList.add("hidden");
+  }
+
+  function showSignedIn() {
+    loginPanel.classList.add("hidden");
+    dashboardPanel.classList.remove("hidden");
+    checklistPanel.classList.remove("hidden");
+    signOutBtn.classList.remove("hidden");
+  }
+
+  function signOut() {
+    adminToken = null;
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    showSignedOut();
+  }
+
+  function renderMode(testMode, source) {
+    // test_mode true -> "Testing mode" (safe/green pill); false -> "BYOK required" (warning/amber pill).
+    modePill.textContent = testMode ? "Testing mode" : "BYOK required";
+    modePill.className = "mode-pill " + (testMode ? "test" : "byok");
+    const sourceLabel = { admin: "set here", env: "from AIRI_TEST_MODE", default: "default (nothing configured)" }[source] || source;
+    sourceTag.textContent = `(${sourceLabel})`;
+    modeExplainer.textContent = testMode
+      ? "Exact-mode requests currently use AIRI's own shared Anthropic/Gemini keys — fine for a demo, but a shared quota anyone signed in can use."
+      : "Exact-mode requests currently require each signed-in user to supply their own Anthropic/Gemini key (BYOK) — nothing shared is used.";
+    byokToggle.checked = !testMode;
+  }
+
+  async function loadDashboard() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/config`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not load admin settings.");
+      renderMode(data.test_mode, data.source);
+      const c = data.configured;
+      document.getElementById("dotAnthropic").className = "dot " + (c.anthropic_key ? "on" : "off");
+      document.getElementById("dotGoogle").className = "dot " + (c.google_key ? "on" : "off");
+      document.getElementById("dotResend").className = "dot " + (c.resend ? "on" : "off");
+      document.getElementById("dotDatabase").className = "dot " + (c.database ? "on" : "off");
+      showSignedIn();
+    } catch (e) {
+      toggleError.textContent = e.message;
+      toggleError.classList.remove("hidden");
+      showSignedIn();
+    }
+  }
+
+  async function login() {
+    loginError.classList.add("hidden");
+    const password = passwordInput.value;
+    if (!password) {
+      loginError.textContent = "Enter the admin password.";
+      loginError.classList.remove("hidden");
+      return;
+    }
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Signing in…";
+    try {
+      const res = await fetch(`${API_BASE}/admin/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Sign-in failed.");
+      adminToken = data.token;
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, adminToken);
+      passwordInput.value = "";
+      await loadDashboard();
+    } catch (e) {
+      loginError.textContent = e.message;
+      loginError.classList.remove("hidden");
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Sign in";
+    }
+  }
+
+  async function onToggleChanged() {
+    toggleError.classList.add("hidden");
+    toggleSavedMsg.classList.add("hidden");
+    // The checkbox's `checked` already reflects the user's new choice by
+    // the time `change` fires — remember it so a failed save can put the
+    // switch back to what it was before, rather than showing a state
+    // that was never actually persisted.
+    const newCheckedState = byokToggle.checked;
+    const newTestMode = !newCheckedState;
+    byokToggle.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/admin/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ test_mode: newTestMode }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || "Could not update the setting.");
+      renderMode(data.test_mode, data.source);
+      toggleSavedMsg.classList.remove("hidden");
+      setTimeout(() => toggleSavedMsg.classList.add("hidden"), 2500);
+    } catch (e) {
+      byokToggle.checked = !newCheckedState;
+      toggleError.textContent = e.message;
+      toggleError.classList.remove("hidden");
+    } finally {
+      byokToggle.disabled = false;
+    }
+  }
+
+  loginBtn.addEventListener("click", login);
+  passwordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+  signOutBtn.addEventListener("click", signOut);
+  byokToggle.addEventListener("change", onToggleChanged);
+
+  if (adminToken) {
+    loadDashboard();
+  } else {
+    showSignedOut();
+  }
+</script>
+</body>
+</html>
