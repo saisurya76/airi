@@ -94,10 +94,12 @@ airi/                   core library — zero web/db/cloud dependencies
   email_provider.py       API-layer only: sends the OTP email via Resend
   exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
   runtime_config.py       API-layer only: test-mode/BYOK toggle (env var + admin-page override)
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /models, /health
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /download, /models, /health
 frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
 frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment config checklist
+frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a new scenario ships
+frontend/developers.html  API quick reference + "download the source" button (GET /download)
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
 sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode override)
 tests/                  sanity checks for every module above

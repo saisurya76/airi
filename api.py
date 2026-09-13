@@ -11,6 +11,7 @@ import io
 import os
 import secrets
 import time
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -562,6 +563,60 @@ def report_pdf(body: ReportRequest):
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
+    )
+
+
+# --- Source download (frontend/developers.html) ---
+#
+# The git repository is moving to restricted access, so this is the
+# ongoing way for a developer to get AIRI's source: a zip built from
+# exactly what's running on this deployment, not a separately
+# maintained artifact that can drift out of sync.
+
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Never shipped, even though most of these are also in .gitignore — this
+# list is a hard safety net independent of git, since the zip is built
+# from the live filesystem, not from a git checkout.
+_DOWNLOAD_EXCLUDE_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
+_DOWNLOAD_EXCLUDE_FILES = {".env"}  # .env.example is fine and included
+DOWNLOAD_CACHE_SECONDS = 300  # rebuild at most this often — a low-traffic convenience endpoint, not a hot path
+
+_download_cache: Dict[str, Any] = {"bytes": None, "built_at": 0.0}
+
+
+def _build_source_zip() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
+            dirnames[:] = sorted(d for d in dirnames if d not in _DOWNLOAD_EXCLUDE_DIRS)
+            for filename in sorted(filenames):
+                if filename in _DOWNLOAD_EXCLUDE_FILES or filename.endswith(".pyc"):
+                    continue
+                full_path = os.path.join(dirpath, filename)
+                rel_path = os.path.relpath(full_path, _REPO_ROOT)
+                zf.write(full_path, arcname=os.path.join("airi-source", rel_path))
+    return buffer.getvalue()
+
+
+@app.get("/download")
+def download_source():
+    """
+    Zips up AIRI's own source (library, API, frontend, SQL migrations,
+    docs) as it's currently deployed here, and serves it as an
+    attachment. Deliberately unauthenticated — this is meant to be
+    publicly downloadable, same spirit as the git repo it's replacing
+    as AIRI's public distribution channel. Cached in memory for
+    DOWNLOAD_CACHE_SECONDS so repeated downloads don't re-walk and
+    re-zip the whole tree on every request.
+    """
+    now = time.monotonic()
+    if _download_cache["bytes"] is None or (now - _download_cache["built_at"]) > DOWNLOAD_CACHE_SECONDS:
+        _download_cache["bytes"] = _build_source_zip()
+        _download_cache["built_at"] = now
+    return Response(
+        content=_download_cache["bytes"],
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="airi-source.zip"'},
     )
 
 

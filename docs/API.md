@@ -517,6 +517,20 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
+## `GET /download`
+
+Unauthenticated. Returns a zip (`airi-source.zip`) of AIRI's own
+source — the library, API, frontend, SQL migrations, and docs — built
+from exactly what's running on this deployment, not a separately
+maintained artifact. This is the distribution channel `frontend/developers.html`
+points to now that the git repository is restricted-access; a `.env`
+file (or anything under `.git/`, `node_modules/`, `__pycache__/`, etc.)
+is never included, even if one happens to exist on the server
+filesystem — see `_DOWNLOAD_EXCLUDE_DIRS`/`_DOWNLOAD_EXCLUDE_FILES` in
+`api.py`. The zip is rebuilt at most once every 5 minutes and served
+from an in-memory cache in between, so repeated downloads don't re-walk
+the tree on every request.
+
 ## Cold starts (demo host only)
 
 If you're hitting `https://airi-mvp-api.onrender.com`, Render's free

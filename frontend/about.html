@@ -1,0 +1,202 @@
+<!--
+  Living usage guide for AIRI. Update this page whenever a new scenario
+  or feature ships on the try-it page — that's the whole point of it
+  being a separate page instead of a paragraph in the README: one place
+  non-technical visitors can read to understand everything AIRI
+  currently does, kept in sync with the app itself.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — What is this?</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .top-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .top-bar a:hover { text-decoration: underline; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  h2 { font-size: 17px; margin: 36px 0 4px; color: var(--text); }
+  h2 .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: #0f1115; font-size: 12px; font-weight: 700;
+    margin-right: 8px; vertical-align: middle;
+  }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 10px 0 0;
+  }
+  .panel p:first-child { margin-top: 0; }
+  .panel p:last-child { margin-bottom: 0; }
+  .panel ol, .panel ul { margin: 10px 0 0; padding-left: 20px; }
+  .panel li { margin-bottom: 6px; }
+  code {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12.5px;
+  }
+  a { color: var(--accent); }
+  .status-chip {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
+    padding: 2px 9px; margin: 0 2px;
+  }
+  .status-chip.safe { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .status-chip.warning { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .status-chip.exceeded { background: rgba(242,85,90,0.15); color: var(--exceeded); }
+  .note {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 10px;
+    background: rgba(122,162,255,0.08);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .cta-row { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; gap: 14px; flex-wrap: wrap; }
+  .cta-row a.btn {
+    background: var(--accent); color: #0f1115; text-decoration: none;
+    border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 600;
+  }
+  .cta-row a.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar"><a href="index.html">← Back to AIRI</a></div>
+
+    <h1>What is AIRI?</h1>
+    <p class="sub">
+      AIRI (AI Request Intelligence) is a pre-flight check for AI requests: before you send a
+      prompt to a model, it estimates how many tokens it'll use, how much context window that
+      eats into, and roughly what it'll cost — so your app can decide to <b>send</b>, <b>modify</b>,
+      or <b>reject</b> the request, instead of finding out after the fact. It's not a token
+      counter you paste text into; it's a small library + API meant to sit in front of your own
+      AI calls.
+    </p>
+
+    <h2><span class="step-num">1</span>Check a single request</h2>
+    <div class="panel">
+      <p>The main box on the try-it page. Paste a prompt (or the request you're planning to
+      send), pick a model, optionally say how many output tokens you expect, and hit
+      <b>Analyze request</b>.</p>
+      <ol>
+        <li>You get back input/output/total token counts, an estimated cost in USD, and how much
+        of that model's context window the request would use.</li>
+        <li>A status badge tells you where you stand:
+          <span class="status-chip safe">SAFE</span>
+          <span class="status-chip warning">WARNING</span>
+          <span class="status-chip exceeded">EXCEEDED</span>
+          — exact thresholds are in the API reference on the
+          <a href="developers.html">Developers page</a>.</li>
+        <li>OpenAI models are counted exactly via <code>tiktoken</code>; everything else uses a
+        fast, honest character-based heuristic by default — see "Exact mode" below for real
+        Claude/Gemini counts.</li>
+      </ol>
+    </div>
+
+    <h2><span class="step-num">2</span>Exact mode — real Claude/Gemini token counts</h2>
+    <div class="panel">
+      <p>Click <b>Exact ▸</b> at the top of the single-request box to switch from estimating
+      Claude/Gemini requests to calling that provider's own token-counting API directly (OpenAI
+      models are already exact either way).</p>
+      <ol>
+        <li>Sign in with just your email — you'll get a one-time 6-digit code, no password to
+        set or remember. This exists purely to keep shared capacity from being hammered by
+        anonymous traffic, not to paywall anything.</li>
+        <li>Once you're signed in, one of two things happens, depending on how this deployment
+        is configured:
+          <ul>
+            <li><b>Testing mode:</b> you're done — AIRI uses its own shared Anthropic/Gemini keys
+            for you.</li>
+            <li><b>BYOK (bring your own key):</b> a small panel asks for your own Anthropic
+            and/or Google (Gemini) API key. It's stored only in your browser and sent along with
+            each Exact request — AIRI never stores it server-side. Use "Manage keys" (next to
+            your email, once signed in) to add, change, or clear it later.</li>
+          </ul>
+        </li>
+        <li>Exact requests return the same fields as Standard, plus <code>method: "provider-api"</code>
+        and higher confidence — if the provider call ever fails, AIRI quietly falls back to the
+        heuristic and says so honestly rather than mislabeling the number.</li>
+      </ol>
+      <div class="note">Which mode a deployment is in is a runtime setting, not something end
+      users choose — see the Developers page if you're running your own AIRI instance.</div>
+    </div>
+
+    <h2><span class="step-num">3</span>Project cost across your whole app</h2>
+    <div class="panel">
+      <p>The <b>Traffic projection</b> section below the single-request box. A real app rarely
+      sends just one kind of request — it has a handful of distinct call-sites (a chat reply, a
+      summary, a classification, etc.), each hit some number of times.</p>
+      <ol>
+        <li>Add one row per distinct AI call-site: a name, a representative sample request, the
+        model it uses, and how many times you expect to call it (from your own analytics or
+        projections — AIRI doesn't guess volume).</li>
+        <li>Click <b>Run projection</b> to get a per-row and grand-total token/cost breakdown,
+        plus a per-model summary.</li>
+      </ol>
+    </div>
+
+    <h2><span class="step-num">4</span>Consolidate a load test into a report</h2>
+    <div class="panel">
+      <p>The <b>Load-test token usage report</b> section. The real flow: your team wires AIRI's
+      <code>/analyze</code> into your service calls, runs your normal load-testing tool of choice
+      against it (k6, JMeter, Locust, your own scripts — any language), tags each result with a
+      label, and submits everything collected to <code>/report</code> at the end of the run.</p>
+      <ol>
+        <li>You get back totals, a SAFE/WARNING/EXCEEDED breakdown, per-label/per-model/per-phase
+        rollups, and the worst-offending requests — plus a downloadable, presentation-ready PDF.</li>
+        <li>Nothing is stored server-side: you submit the records from a run you already have,
+        AIRI just does the arithmetic and renders the report.</li>
+        <li>The section on the try-it page simulates this whole flow with made-up services so you
+        can see the report it produces without wiring anything up first.</li>
+      </ol>
+    </div>
+
+    <h2><span class="step-num">5</span>Wire it into your own app</h2>
+    <div class="panel">
+      <p>Everything above is also a plain HTTP API (and, if you're in Python, an importable
+      library with zero mandatory network calls) — see the <a href="developers.html">Developers
+      page</a> for API access and the full endpoint reference.</p>
+    </div>
+
+    <p class="note" style="margin-top:28px;">
+      This page covers every scenario AIRI supports today. It gets updated whenever a new one
+      ships, so it's always a complete picture of what you can do here — not a snapshot of
+      launch day.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn" href="index.html">Try it now →</a>
+      <a class="btn secondary" href="developers.html">Developers →</a>
+    </div>
+  </div>
+</body>
+</html>
