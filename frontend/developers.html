@@ -90,38 +90,47 @@
 
     <h1>Developers</h1>
     <p class="sub">
-      Everything on the try-it page is also a plain HTTP API, and the estimation logic itself is
-      an importable Python library with zero mandatory network calls. This page is for wiring
-      AIRI into your own app.
+      Everything on the try-it page is also a plain HTTP API, and the core estimation logic is
+      also available as a compiled library if you'd rather run it in-process. This page is for
+      wiring AIRI into your own app.
     </p>
 
-    <h2>Get the source</h2>
+    <h2>Get the compiled library</h2>
     <div class="panel">
       <p>
-        AIRI's source repository is moving to restricted access. This is now the way to get a
-        copy of the exact code currently running this deployment — the library, the API, the
-        frontend, SQL migrations, and docs — as a zip.
+        AIRI's source isn't publicly distributed. What you can download here is a
+        <b>compiled build</b> of just the core estimation library — the token/cost math behind
+        <code>analyze()</code>/<code>project()</code>/<code>build_report()</code> — as bytecode
+        only, no <code>.py</code> source included. It doesn't contain the API server, the
+        frontend, SQL migrations, or docs; for everything else, use the HTTP API below instead of
+        self-hosting.
       </p>
-      <button type="button" id="downloadBtn" class="btn">Download AIRI source (.zip)</button>
-      <div class="download-size" id="downloadHint">Generated fresh from what's currently deployed.</div>
+      <button type="button" id="downloadBtn" class="btn">Download AIRI (compiled library)</button>
+      <div class="download-size" id="downloadHint">Generated fresh from what's currently deployed — always matches the live service.</div>
       <div id="downloadError" class="error hidden"></div>
     </div>
 
-    <h2>Running it yourself</h2>
+    <h2>Using the compiled library</h2>
     <div class="panel">
-      <p>Once unzipped:</p>
-      <pre><code>pip install -r requirements.txt
-uvicorn api:app --reload</code></pre>
-      <p>That's enough for <code>/analyze</code>, <code>/project</code>, and <code>/report*</code> —
-      no database, no API keys, no config. Email sign-in and Exact mode
-      (real Claude/Gemini token counts) are opt-in and need a bit of setup;
-      see <code>docs/EXACT_MODE.md</code> and <code>docs/ADMIN.md</code> in the download.</p>
+      <p>Once unzipped, drop the <code>airi/</code> folder next to your script (or add it to
+      <code>PYTHONPATH</code>):</p>
+      <pre><code>from airi import analyze
+
+result = analyze(prompt="Explain quantum computing simply.",
+                  model="gpt-4o", expected_output_tokens=500)
+print(result.to_dict())</code></pre>
+      <p>One requirement worth knowing up front: this is compiled bytecode, tied to the exact
+      CPython minor version that produced it (currently <b>Python 3.11.x</b> — see the
+      <code>README.txt</code> in the download for the exact version at any given time). Importing
+      it under a different Python 3 minor version raises a "bad magic number" error rather than
+      silently misbehaving. If that's a blocker, the HTTP API below works from any language,
+      no Python version to match at all.</p>
     </div>
 
     <h2>API at a glance</h2>
     <div class="panel">
-      <p>Full request/response reference is in <code>docs/API.md</code> (in the download above).
-      The core endpoints:</p>
+      <p>The core endpoints — this is the easiest integration path if you don't need to run the
+      estimation math in-process:</p>
       <table class="endpoint-table">
         <thead><tr><th>Endpoint</th><th>What it does</th></tr></thead>
         <tbody>
@@ -161,7 +170,7 @@ uvicorn api:app --reload</code></pre>
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "airi-source.zip";
+      a.download = "airi-binary.zip";
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -171,7 +180,7 @@ uvicorn api:app --reload</code></pre>
       downloadError.classList.remove("hidden");
     } finally {
       downloadBtn.disabled = false;
-      downloadBtn.textContent = "Download AIRI source (.zip)";
+      downloadBtn.textContent = "Download AIRI (compiled library)";
     }
   });
 </script>

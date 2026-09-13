@@ -116,7 +116,7 @@ frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK k
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
 frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment checklist + author-profile editor
 frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a new scenario ships
-frontend/developers.html  API quick reference + "download the source" button (GET /download)
+frontend/developers.html  API quick reference + compiled-core-library download button (GET /download; source is not distributed)
 frontend/author.html   public founder/about page, built entirely from the admin-edited author profile
 frontend/privacy.html  privacy policy, linked from every page's footer
 frontend/workspaces.html  signed-in workspaces/projects app (Phase 1: CRUD + app-key delete confirmation; Phase 2: AIRI tools runnable per project with saved run history; Phase 3: Dashboard/Notes/Actions tabs + downloadable consolidated PDF report; Phase 4: cross-project comparison tab + PDF report + per-run PDF downloads)

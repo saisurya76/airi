@@ -9,7 +9,10 @@ Then open http://127.0.0.1:8000/
 
 import io
 import os
+import py_compile
 import secrets
+import sys
+import tempfile
 import time
 import zipfile
 from collections import defaultdict, deque
@@ -1262,57 +1265,117 @@ def report_pdf(body: ReportRequest):
     )
 
 
-# --- Source download (frontend/developers.html) ---
+# --- Binary download (frontend/developers.html) ---
 #
-# The git repository is moving to restricted access, so this is the
-# ongoing way for a developer to get AIRI's source: a zip built from
-# exactly what's running on this deployment, not a separately
-# maintained artifact that can drift out of sync.
+# The public download used to be a zip of the entire repository
+# (library + API + frontend + SQL migrations + docs). That's no longer
+# what's offered: this is now a *compiled* build of just AIRI's core
+# estimation library — the small, zero-web/db/cloud-dependency module
+# set behind `from airi import analyze` (see README.md's project
+# layout for the exact "core library" vs. "API-layer only" split).
+# Nothing else — not api.py, not frontend/, not sql/, not docs/, not
+# the API-layer-only airi/ modules (auth.py, db.py, workspaces.py,
+# etc.) — is ever included. This is an explicit allowlist (not a
+# denylist over the whole tree, which is what the old version did), so
+# a new file added anywhere in the repo is excluded by default rather
+# than shipped by accident.
+#
+# "Compiled" means exactly that: each module below is compiled to
+# Python bytecode (.pyc) and shipped *without* its .py source — a
+# sourceless distribution, which CPython's import machinery loads
+# natively with no extra tooling. This is why frontend/developers.html
+# calls out the exact CPython version required: the bytecode is tied
+# to whichever interpreter this server is running (see
+# PY_BINARY_VERSION below), not just any Python 3.
+#
+# Rebuilt from whatever's on disk at cache-expiry time (or on first
+# request after a restart), the same as the old source zip was — so a
+# new deploy of the core library is reflected here automatically, with
+# no separate publish step.
 
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-# Never shipped, even though most of these are also in .gitignore — this
-# list is a hard safety net independent of git, since the zip is built
-# from the live filesystem, not from a git checkout.
-_DOWNLOAD_EXCLUDE_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".pytest_cache", ".mypy_cache"}
-_DOWNLOAD_EXCLUDE_FILES = {".env"}  # .env.example is fine and included
+
+# The exact "core library" file set — see README.md's project layout.
+# Deliberately a hardcoded allowlist: only these files, from airi/ only.
+_CORE_LIBRARY_FILES = [
+    "__init__.py",
+    "models.py",
+    "registry.py",
+    "pricing.py",
+    "tokenizer.py",
+    "analyzer.py",
+    "projector.py",
+    "report.py",
+    "report_render.py",
+]
+PY_BINARY_VERSION = "%d.%d" % (sys.version_info.major, sys.version_info.minor)
 DOWNLOAD_CACHE_SECONDS = 300  # rebuild at most this often — a low-traffic convenience endpoint, not a hot path
 
 _download_cache: Dict[str, Any] = {"bytes": None, "built_at": 0.0}
 
+_BINARY_README = """AIRI -- compiled core library (Python {version})
+=================================================
 
-def _build_source_zip() -> bytes:
+This is a compiled (bytecode-only) build of AIRI's core token/cost
+estimation library -- no source code included. It's rebuilt from
+whatever's currently deployed every time it's downloaded, so it always
+matches the live service.
+
+Usage -- unzip, then either drop the airi/ folder next to your script
+or add it to PYTHONPATH:
+
+    from airi import analyze, project, build_report
+
+    result = analyze(prompt="Explain quantum computing simply.",
+                      model="gpt-4o", expected_output_tokens=500)
+    print(result.to_dict())
+
+Requirements:
+  - CPython {version}.x specifically -- compiled bytecode is tied to the
+    exact interpreter version that produced it. A different Python 3
+    minor version will raise "bad magic number" on import.
+  - No other dependencies for analyze()/project(). build_report()'s
+    HTML rendering needs no extra dependency either (stdlib only);
+    turning that HTML into a PDF (as AIRI's own /report/pdf does) needs
+    xhtml2pdf, which is not bundled here.
+
+Not included: the API server, the frontend, SQL migrations, docs, or
+any of AIRI's account/auth/workspace features -- those aren't
+distributed as source. For everything else, use the hosted HTTP API
+directly (see the Developers page) rather than self-hosting.
+""".format(version=PY_BINARY_VERSION)
+
+
+def _build_binary_zip() -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
-            dirnames[:] = sorted(d for d in dirnames if d not in _DOWNLOAD_EXCLUDE_DIRS)
-            for filename in sorted(filenames):
-                if filename in _DOWNLOAD_EXCLUDE_FILES or filename.endswith(".pyc"):
-                    continue
-                full_path = os.path.join(dirpath, filename)
-                rel_path = os.path.relpath(full_path, _REPO_ROOT)
-                zf.write(full_path, arcname=os.path.join("airi-source", rel_path))
+        zf.writestr("airi-binary/README.txt", _BINARY_README)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for filename in _CORE_LIBRARY_FILES:
+                src_path = os.path.join(_REPO_ROOT, "airi", filename)
+                pyc_path = os.path.join(tmp_dir, filename + "c")  # foo.py -> foo.pyc
+                py_compile.compile(src_path, cfile=pyc_path, dfile=filename, doraise=True)
+                zf.write(pyc_path, arcname=os.path.join("airi-binary", "airi", filename + "c"))
     return buffer.getvalue()
 
 
 @app.get("/download")
-def download_source():
+def download_binary():
     """
-    Zips up AIRI's own source (library, API, frontend, SQL migrations,
-    docs) as it's currently deployed here, and serves it as an
-    attachment. Deliberately unauthenticated — this is meant to be
-    publicly downloadable, same spirit as the git repo it's replacing
-    as AIRI's public distribution channel. Cached in memory for
-    DOWNLOAD_CACHE_SECONDS so repeated downloads don't re-walk and
-    re-zip the whole tree on every request.
+    Serves a compiled (sourceless bytecode) build of AIRI's core
+    library as a zip attachment -- see the module-level comment above
+    for exactly what is and isn't included. Deliberately unauthenticated
+    and publicly downloadable. Cached in memory for DOWNLOAD_CACHE_SECONDS
+    so repeated downloads don't recompile on every request.
     """
     now = time.monotonic()
     if _download_cache["bytes"] is None or (now - _download_cache["built_at"]) > DOWNLOAD_CACHE_SECONDS:
-        _download_cache["bytes"] = _build_source_zip()
+        _download_cache["bytes"] = _build_binary_zip()
         _download_cache["built_at"] = now
     return Response(
         content=_download_cache["bytes"],
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="airi-source.zip"'},
+        headers={"Content-Disposition": 'attachment; filename="airi-binary.zip"'},
     )
 
 

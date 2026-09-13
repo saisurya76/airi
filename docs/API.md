@@ -569,17 +569,28 @@ for the Phase 4 comparison tab and per-run PDF downloads.
 
 ## `GET /download`
 
-Unauthenticated. Returns a zip (`airi-source.zip`) of AIRI's own
-source — the library, API, frontend, SQL migrations, and docs — built
-from exactly what's running on this deployment, not a separately
-maintained artifact. This is the distribution channel `frontend/developers.html`
-points to now that the git repository is restricted-access; a `.env`
-file (or anything under `.git/`, `node_modules/`, `__pycache__/`, etc.)
-is never included, even if one happens to exist on the server
-filesystem — see `_DOWNLOAD_EXCLUDE_DIRS`/`_DOWNLOAD_EXCLUDE_FILES` in
-`api.py`. The zip is rebuilt at most once every 5 minutes and served
-from an in-memory cache in between, so repeated downloads don't re-walk
-the tree on every request.
+Unauthenticated. Returns a zip (`airi-binary.zip`) containing a
+**compiled build of just AIRI's core estimation library** — the
+`airi/` files with zero web/db/cloud dependencies (`__init__.py`,
+`models.py`, `registry.py`, `pricing.py`, `tokenizer.py`,
+`analyzer.py`, `projector.py`, `report.py`, `report_render.py`; see
+README.md's project layout), compiled to `.pyc` bytecode with no `.py`
+source included. AIRI's source is not publicly distributed — this
+replaces an earlier version of this endpoint that shipped the entire
+repository (library, API, frontend, SQL migrations, docs); that is no
+longer offered. The file set is a hardcoded allowlist in `api.py`
+(`_CORE_LIBRARY_FILES`), not a denylist over the whole tree, so
+nothing outside it can be shipped by accident.
+
+Because it's compiled bytecode, it's tied to the exact CPython minor
+version running on this deployment (currently 3.11.x — see
+`PY_BINARY_VERSION` in `api.py`, and the bundled `README.txt` for the
+exact version at download time); importing it under a different Python
+3 minor version raises `ImportError: bad magic number`. The zip is
+rebuilt at most once every 5 minutes and served from an in-memory
+cache in between (`DOWNLOAD_CACHE_SECONDS`), so a code change to the
+core library is reflected here automatically on the next rebuild —
+no separate publish step.
 
 ## Cold starts (demo host only)
 

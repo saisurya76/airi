@@ -158,8 +158,8 @@
         and higher confidence — if the provider call ever fails, AIRI quietly falls back to the
         heuristic and says so honestly rather than mislabeling the number.</li>
       </ol>
-      <div class="note">Which mode a deployment is in is a runtime setting, not something end
-      users choose — see the Developers page if you're running your own AIRI instance.</div>
+      <div class="note">Which mode a deployment is in is a runtime setting controlled server-side
+      by whoever operates it — not something end users choose.</div>
     </div>
 
     <h2><span class="step-num">3</span>Project cost across your whole app</h2>
@@ -216,17 +216,20 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
         AIRI just does the arithmetic and renders the report. Run it again tomorrow with a fresh
         set of records and you get a fresh report — there's no history to manage or clean up.</li>
         <li>The section on the try-it page simulates this whole flow with made-up services so you
-        can see the report it produces without wiring anything up first. <code>docs/INTEGRATION.md</code>,
-        in the source download on the <a href="developers.html">Developers page</a>, has the full
-        walkthrough, including a non-Python example (k6/JMeter).</li>
+        can see the report it produces without wiring anything up first. The pattern above is
+        language-agnostic: collect each <code>/analyze</code> result in a JS array from k6,
+        append it to a shared list from a JMeter post-processor, or just build up the same JSON
+        from a plain shell script piping <code>curl</code> output — anything that can call
+        <code>/analyze</code> and hold onto the results can build this <code>records</code> list.</li>
       </ol>
     </div>
 
     <h2><span class="step-num">5</span>Wire it into your own app</h2>
     <div class="panel">
-      <p>Everything above is also a plain HTTP API (and, if you're in Python, an importable
-      library with zero mandatory network calls) — see the <a href="developers.html">Developers
-      page</a> for API access and the full endpoint reference.</p>
+      <p>Everything above is also a plain HTTP API (and, if you're in Python and would rather run
+      the estimation math in-process, a compiled build of the core library) — see the
+      <a href="developers.html">Developers page</a> for API access, the compiled-library download,
+      and the full endpoint reference.</p>
     </div>
 
     <p class="note" style="margin-top:28px;">
