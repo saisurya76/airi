@@ -63,6 +63,6 @@ CREATE INDEX IF NOT EXISTS projects_workspace_idx ON projects (workspace_id);
 
 -- Not built yet (later phases, see docs/WORKSPACES.md), but named here
 -- so the eventual migration numbers stay predictable:
---   004 — project_notes (append-only comment history, per project)
---   005 — project_tool_runs (saved results per AIRI tool tab, for the
---         dashboard + comparison tab + consolidated report)
+--   004 — project_tool_runs (saved results per AIRI tool tab — see
+--         sql/004_project_tool_runs.sql, built in Phase 2)
+--   005 — project_notes (append-only comment history, per project)

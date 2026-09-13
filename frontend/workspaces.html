@@ -156,6 +156,27 @@
   .project-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
   .required-mark { color: var(--exceeded); }
   .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+
+  .proj-tabs { display: flex; gap: 4px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px; margin-bottom: 14px; }
+  .proj-tab-btn { margin: 0; background: transparent; color: var(--muted); border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .proj-tab-btn.active { background: var(--accent); color: #0f1115; }
+  .proj-tab-panel.hidden { display: none; }
+  .sub-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: #0f1115; }
+  .remove-row-btn { margin-top: 8px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .stat .value { font-size: 16px; font-weight: 600; }
+  .status-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }
+  .status-SAFE { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .status-WARNING { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .status-EXCEEDED { background: rgba(242,85,90,0.15); color: var(--exceeded); }
+  table.tool-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  table.tool-table th, table.tool-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.tool-table th { color: var(--muted); font-weight: 500; font-size: 11px; }
+  table.tool-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
+  .history-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; width: 100%; }
+  .history-entry { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
   .tab-note {
     color: var(--muted);
     font-size: 12px;
@@ -336,9 +357,10 @@
           <div id="createProjectError" class="error hidden"></div>
 
           <div class="tab-note">
-            Per-project AIRI tool tabs, a dashboard, a notes history, an actions/report tab, and a
-            cross-project comparison view are on the way in the next phase — for now each project's
-            description and tech stack are saved here and restored whenever you sign back in.
+            Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
+            report tools inside it — every run is saved to that project's history. A dashboard, a
+            notes history, a consolidated actions/report tab, and a cross-project comparison view
+            are on the way in later phases.
           </div>
         </div>
       </div>
@@ -380,6 +402,22 @@
   let workspaces = [];
   let currentWorkspace = null; // full detail object, or null when on the list view
   let techStackCategories = {};
+  let modelsData = [];
+  let testMode = null; // null = not loaded yet; true/false once GET /config resolves
+
+  // Shared with index.html's BYOK panel — a project's Exact tab reuses
+  // whatever key the user already saved there (or saves a new one),
+  // same "this browser only, never sent anywhere but one Exact request"
+  // handling as index.html.
+  const BYOK_ANTHROPIC_KEY = "airi_byok_anthropic_key";
+  const BYOK_GOOGLE_KEY = "airi_byok_google_key";
+
+  function modelOptionsHtml(selected) {
+    const list = modelsData.length ? modelsData : [{ id: "gpt-4o", context_window: 128000 }];
+    return list
+      .map((m) => `<option value="${m.id}"${m.id === selected ? " selected" : ""}>${m.id} (${m.context_window.toLocaleString()} ctx)</option>`)
+      .join("");
+  }
 
   const signInView = document.getElementById("signInView");
   const appView = document.getElementById("appView");
@@ -807,24 +845,33 @@
       body.className = "project-body hidden";
       const idPrefix = `proj-${p.id}`;
       body.innerHTML = `
-        <div class="field">
-          <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
-          <input id="${idPrefix}-title" value="${escapeHtml(p.title)}" />
+        <div class="proj-tabs">
+          <button type="button" class="proj-tab-btn active" data-tab="details">Details</button>
+          <button type="button" class="proj-tab-btn" data-tab="analyze">Standard</button>
+          <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
+          <button type="button" class="proj-tab-btn" data-tab="project">Traffic</button>
+          <button type="button" class="proj-tab-btn" data-tab="report">Load Test</button>
         </div>
-        <div class="field">
-          <label for="${idPrefix}-description">Description</label>
-          <textarea id="${idPrefix}-description">${escapeHtml(p.description)}</textarea>
+        <div class="proj-tab-panel" data-panel="details">
+          <div class="field">
+            <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
+            <input id="${idPrefix}-title" value="${escapeHtml(p.title)}" />
+          </div>
+          <div class="field">
+            <label for="${idPrefix}-description">Description</label>
+            <textarea id="${idPrefix}-description">${escapeHtml(p.description)}</textarea>
+          </div>
+          <div class="tech-grid" id="${idPrefix}-stack"></div>
+          <div class="row">
+            <div><button type="button" class="save-project-btn" style="width:100%;">Save</button></div>
+            <div style="flex:0;"><button type="button" class="danger-btn delete-project-btn">Delete</button></div>
+          </div>
+          <div class="error hidden save-project-error"></div>
         </div>
-        <div class="tech-grid" id="${idPrefix}-stack"></div>
-        <div class="row">
-          <div><button type="button" class="save-project-btn" style="width:100%;">Save</button></div>
-          <div style="flex:0;"><button type="button" class="danger-btn delete-project-btn">Delete</button></div>
-        </div>
-        <div class="error hidden save-project-error"></div>
-        <div class="tab-note">
-          AIRI tool tabs, dashboard, notes, actions/report, and comparison for this project arrive in
-          the next phase.
-        </div>
+        <div class="proj-tab-panel hidden" data-panel="analyze"></div>
+        <div class="proj-tab-panel hidden" data-panel="exact"></div>
+        <div class="proj-tab-panel hidden" data-panel="project"></div>
+        <div class="proj-tab-panel hidden" data-panel="report"></div>
       `;
       row.querySelector(".project-summary").addEventListener("click", () => {
         body.classList.toggle("hidden");
@@ -863,6 +910,23 @@
           }
         );
       });
+
+      // Tool tabs — each tool's panel is built lazily the first time it's
+      // opened (rather than for all 4 tools x every project up front).
+      body.querySelectorAll(".proj-tab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.tab;
+          body.querySelectorAll(".proj-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+          body.querySelectorAll(".proj-tab-panel").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.panel !== tab));
+          if (tab !== "details") {
+            const panel = body.querySelector(`.proj-tab-panel[data-panel="${tab}"]`);
+            if (!panel.dataset.rendered) {
+              panel.dataset.rendered = "1";
+              renderToolPanel(tab, p, panel);
+            }
+          }
+        });
+      });
     }
   }
 
@@ -887,6 +951,319 @@
     }
   });
 
+  // ---------- per-project AIRI tool tabs (Phase 2) ----------
+
+  function statusBadgeHtml(status) {
+    return `<span class="status-badge status-${status}">${status}</span>`;
+  }
+
+  function renderAnalyzeResult(r) {
+    return `
+      <div class="result-grid">
+        <div class="stat"><div class="label">Input tokens</div><div class="value">${r.input_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Est. output tokens</div><div class="value">${r.estimated_output_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Est. total tokens</div><div class="value">${r.estimated_total_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Est. cost</div><div class="value">$${r.estimated_cost.toFixed(4)}</div></div>
+      </div>
+      <div style="margin-top:10px;">
+        ${statusBadgeHtml(r.status)}
+        <span class="stack-chip">${(r.context_utilization * 100).toFixed(1)}% of ${r.context_window.toLocaleString()} ctx · ${escapeHtml(r.method)}${r.known_model ? "" : " · unknown model, heuristic pricing"}</span>
+      </div>
+      ${r.exact_mode_note ? `<div class="tab-note">${escapeHtml(r.exact_mode_note)}</div>` : ""}
+    `;
+  }
+
+  function renderProjectResult(r) {
+    const rows = r.archetypes.map((a) => `
+      <tr>
+        <td>${escapeHtml(a.name)}</td>
+        <td>${escapeHtml(a.model)}</td>
+        <td>${a.volume.toLocaleString()}</td>
+        <td>${a.projected_total_tokens.toLocaleString()}</td>
+        <td>$${a.projected_cost.toFixed(4)}</td>
+      </tr>
+    `).join("");
+    return `
+      <table class="tool-table">
+        <thead><tr><th>Archetype</th><th>Model</th><th>Volume</th><th>Total tokens</th><th>Cost</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td colspan="3">Grand total</td><td>${r.total_tokens.toLocaleString()}</td><td>$${r.total_cost.toFixed(4)}</td></tr></tfoot>
+      </table>
+      ${r.any_exceeded ? `<div class="tab-note" style="color:var(--exceeded); border-color:rgba(242,85,90,0.3);">One or more archetypes already exceed their model's context window at a single-request level.</div>` : ""}
+    `;
+  }
+
+  function renderReportResult(r) {
+    return `
+      <div class="result-grid">
+        <div class="stat"><div class="label">Requests</div><div class="value">${r.total_requests.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total tokens</div><div class="value">${r.total_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total cost</div><div class="value">$${r.total_cost.toFixed(4)}</div></div>
+        <div class="stat"><div class="label">Avg tokens/req</div><div class="value">${r.avg_tokens_per_request.toLocaleString()}</div></div>
+      </div>
+      <div style="margin-top:10px;">
+        ${statusBadgeHtml("SAFE")} ${r.status_counts.SAFE} &nbsp;
+        ${statusBadgeHtml("WARNING")} ${r.status_counts.WARNING} &nbsp;
+        ${statusBadgeHtml("EXCEEDED")} ${r.status_counts.EXCEEDED}
+      </div>
+    `;
+  }
+
+  function renderToolResult(tool, result) {
+    if (tool === "analyze" || tool === "exact") return renderAnalyzeResult(result);
+    if (tool === "project") return renderProjectResult(result);
+    return renderReportResult(result);
+  }
+
+  async function loadToolHistory(tool, project, idPrefix) {
+    const historyEl = document.getElementById(`${idPrefix}-history`);
+    historyEl.textContent = "Loading…";
+    try {
+      const runs = await apiFetch(`/projects/${project.id}/tools/${tool}/runs`);
+      renderRunHistory(tool, project, idPrefix, runs);
+    } catch (e) {
+      historyEl.innerHTML = `<div class="empty-state">Could not load run history.</div>`;
+    }
+  }
+
+  function renderRunHistory(tool, project, idPrefix, runs) {
+    const historyEl = document.getElementById(`${idPrefix}-history`);
+    if (!runs.length) {
+      historyEl.innerHTML = `<div class="empty-state">No runs yet — use the form above.</div>`;
+      return;
+    }
+    historyEl.innerHTML = runs.map((run) => `
+      <div class="history-entry" data-run-id="${run.id}">
+        <div class="history-summary">
+          <span>${escapeHtml(run.label || "(unlabeled run)")} <span class="stack-chip">${new Date(run.created_at).toLocaleString()}</span></span>
+          <span class="link-btn">View ▾</span>
+        </div>
+        <div class="history-detail hidden" style="margin-top:10px;"></div>
+      </div>
+    `).join("");
+
+    historyEl.querySelectorAll("[data-run-id]").forEach((rowEl) => {
+      const runId = Number(rowEl.dataset.runId);
+      const run = runs.find((r) => r.id === runId);
+      const detailEl = rowEl.querySelector(".history-detail");
+      rowEl.querySelector(".history-summary").addEventListener("click", () => {
+        detailEl.classList.toggle("hidden");
+        if (detailEl.dataset.rendered) return;
+        detailEl.dataset.rendered = "1";
+        detailEl.innerHTML = renderToolResult(tool, run.result) + `<button type="button" class="danger-btn delete-run-btn" style="margin-top:10px;">Delete this run</button>`;
+        detailEl.querySelector(".delete-run-btn").addEventListener("click", () => {
+          openConfirmModal(
+            "Delete this run?",
+            "This saved result will be permanently deleted.",
+            async (appKey) => {
+              await apiFetch(`/projects/${project.id}/tools/${tool}/runs/${runId}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
+              await loadToolHistory(tool, project, idPrefix);
+            }
+          );
+        });
+      });
+    });
+  }
+
+  function addDynamicRow(container, html, wire) {
+    const div = document.createElement("div");
+    div.className = "sub-card";
+    div.innerHTML = html;
+    div.querySelector(".remove-row-btn").addEventListener("click", () => div.remove());
+    if (wire) wire(div);
+    container.appendChild(div);
+    return div;
+  }
+
+  function addArchetypeRow(container, n) {
+    addDynamicRow(container, `
+      <div class="row">
+        <div><label>Name</label><input class="arch-name" value="Archetype ${n}" /></div>
+        <div><label>Volume</label><input class="arch-volume" type="number" min="0" value="1000" /></div>
+      </div>
+      <div class="field"><label>Sample prompt</label><textarea class="arch-prompt" placeholder="A representative request for this call-site..."></textarea></div>
+      <div class="row">
+        <div><label>Model</label><select class="arch-model">${modelOptionsHtml("gpt-4o")}</select></div>
+        <div><label>Expected output tokens</label><input class="arch-output" type="number" min="0" value="200" /></div>
+      </div>
+      <button type="button" class="danger-btn remove-row-btn">Remove</button>
+    `);
+  }
+
+  function addRecordRow(container, n) {
+    addDynamicRow(container, `
+      <div class="row">
+        <div><label>Label</label><input class="rec-label" value="Request ${n}" /></div>
+        <div><label>Phase (optional)</label><input class="rec-phase" placeholder="e.g. normal / peak" /></div>
+      </div>
+      <div class="field"><label>Prompt</label><textarea class="rec-prompt" placeholder="What this request sends..."></textarea></div>
+      <div class="row">
+        <div><label>Model</label><select class="rec-model">${modelOptionsHtml("gpt-4o")}</select></div>
+        <div><label>Expected output tokens</label><input class="rec-output" type="number" min="0" value="150" /></div>
+      </div>
+      <button type="button" class="danger-btn remove-row-btn">Remove</button>
+    `);
+  }
+
+  function renderToolPanel(tool, project, panelEl) {
+    const idPrefix = `proj-${project.id}-${tool}`;
+
+    if (tool === "analyze" || tool === "exact") {
+      const byokNote = tool === "exact" && testMode === false
+        ? `<div class="tab-note">This deployment is in BYOK mode — the Anthropic/Google key you saved on the main page (if any) is reused here. <a href="index.html" style="color:var(--accent);">Manage keys</a>.</div>`
+        : (tool === "exact" ? `<div class="tab-note">This deployment is in testing mode — Exact calls use AIRI's own shared keys here, nothing to configure.</div>` : "");
+      panelEl.innerHTML = `
+        <div class="field"><label for="${idPrefix}-prompt">Prompt</label><textarea id="${idPrefix}-prompt" placeholder="Paste or write the request..."></textarea></div>
+        <div class="row">
+          <div><label for="${idPrefix}-model">Model</label><select id="${idPrefix}-model">${modelOptionsHtml("gpt-4o")}</select></div>
+          <div><label for="${idPrefix}-output">Expected output tokens</label><input id="${idPrefix}-output" type="number" min="0" value="200" /></div>
+        </div>
+        ${byokNote}
+        <div class="field"><label for="${idPrefix}-label">Label (optional)</label><input id="${idPrefix}-label" placeholder="e.g. Baseline check" /></div>
+        <div class="row"><div><button type="button" id="${idPrefix}-run-btn" style="width:100%;">Run ${tool === "exact" ? "Exact" : "Standard"}</button></div></div>
+        <div class="error hidden" id="${idPrefix}-error"></div>
+        <div id="${idPrefix}-result"></div>
+        <h3 style="margin-top:18px;">Run history</h3>
+        <div id="${idPrefix}-history"></div>
+      `;
+      document.getElementById(`${idPrefix}-run-btn`).addEventListener("click", async () => {
+        const errorEl = document.getElementById(`${idPrefix}-error`);
+        errorEl.classList.add("hidden");
+        const prompt = document.getElementById(`${idPrefix}-prompt`).value.trim();
+        if (!prompt) { errorEl.textContent = "Enter a prompt."; errorEl.classList.remove("hidden"); return; }
+        const payload = {
+          prompt,
+          model: document.getElementById(`${idPrefix}-model`).value,
+          expected_output_tokens: parseInt(document.getElementById(`${idPrefix}-output`).value || "0", 10),
+          label: document.getElementById(`${idPrefix}-label`).value.trim(),
+        };
+        if (tool === "exact") {
+          const a = localStorage.getItem(BYOK_ANTHROPIC_KEY);
+          const g = localStorage.getItem(BYOK_GOOGLE_KEY);
+          if (a) payload.anthropic_api_key = a;
+          if (g) payload.google_api_key = g;
+        }
+        try {
+          const run = await apiFetch(`/projects/${project.id}/tools/${tool}/runs`, { method: "POST", body: JSON.stringify(payload) });
+          document.getElementById(`${idPrefix}-result`).innerHTML = renderAnalyzeResult(run.result);
+          document.getElementById(`${idPrefix}-label`).value = "";
+          await loadToolHistory(tool, project, idPrefix);
+        } catch (e) {
+          errorEl.textContent = e.message;
+          errorEl.classList.remove("hidden");
+        }
+      });
+      loadToolHistory(tool, project, idPrefix);
+      return;
+    }
+
+    if (tool === "project") {
+      panelEl.innerHTML = `
+        <p class="sub" style="margin:0 0 6px;">Given a few distinct AI call-sites in this project, each with a sample request and a volume you supply, this projects total tokens/cost.</p>
+        <div id="${idPrefix}-archetypes"></div>
+        <div class="row"><div><button type="button" class="secondary-btn" id="${idPrefix}-add" style="width:100%;">+ Add archetype</button></div></div>
+        <div class="field"><label for="${idPrefix}-label">Label (optional)</label><input id="${idPrefix}-label" placeholder="e.g. Q4 projection" /></div>
+        <div class="row"><div><button type="button" id="${idPrefix}-run-btn" style="width:100%;">Run projection</button></div></div>
+        <div class="error hidden" id="${idPrefix}-error"></div>
+        <div id="${idPrefix}-result"></div>
+        <h3 style="margin-top:18px;">Run history</h3>
+        <div id="${idPrefix}-history"></div>
+      `;
+      const archetypesEl = document.getElementById(`${idPrefix}-archetypes`);
+      let archCount = 0;
+      const addRow = () => { archCount += 1; addArchetypeRow(archetypesEl, archCount); };
+      addRow();
+      document.getElementById(`${idPrefix}-add`).addEventListener("click", addRow);
+      document.getElementById(`${idPrefix}-run-btn`).addEventListener("click", async () => {
+        const errorEl = document.getElementById(`${idPrefix}-error`);
+        errorEl.classList.add("hidden");
+        const archetypes = Array.from(archetypesEl.children).map((row) => ({
+          name: row.querySelector(".arch-name").value.trim() || "Archetype",
+          volume: parseInt(row.querySelector(".arch-volume").value || "0", 10),
+          prompt: row.querySelector(".arch-prompt").value.trim(),
+          model: row.querySelector(".arch-model").value,
+          expected_output_tokens: parseInt(row.querySelector(".arch-output").value || "0", 10),
+        }));
+        if (!archetypes.length) { errorEl.textContent = "Add at least one archetype."; errorEl.classList.remove("hidden"); return; }
+        const payload = { archetypes, label: document.getElementById(`${idPrefix}-label`).value.trim() };
+        try {
+          const run = await apiFetch(`/projects/${project.id}/tools/project/runs`, { method: "POST", body: JSON.stringify(payload) });
+          document.getElementById(`${idPrefix}-result`).innerHTML = renderProjectResult(run.result);
+          document.getElementById(`${idPrefix}-label`).value = "";
+          await loadToolHistory(tool, project, idPrefix);
+        } catch (e) {
+          errorEl.textContent = e.message;
+          errorEl.classList.remove("hidden");
+        }
+      });
+      loadToolHistory(tool, project, idPrefix);
+      return;
+    }
+
+    // tool === "report"
+    panelEl.innerHTML = `
+      <p class="sub" style="margin:0 0 6px;">Add the requests from a load-test run (each becomes one /analyze call), then build a consolidated report — saved here just like the other tools.</p>
+      <div id="${idPrefix}-records"></div>
+      <div class="row"><div><button type="button" class="secondary-btn" id="${idPrefix}-add" style="width:100%;">+ Add request</button></div></div>
+      <div class="row">
+        <div><label for="${idPrefix}-runname">Run name</label><input id="${idPrefix}-runname" placeholder="e.g. Weekly load test" /></div>
+        <div><label for="${idPrefix}-label">Label (optional)</label><input id="${idPrefix}-label" placeholder="for this saved run" /></div>
+      </div>
+      <div class="row"><div><button type="button" id="${idPrefix}-run-btn" style="width:100%;">Build report</button></div></div>
+      <div class="error hidden" id="${idPrefix}-error"></div>
+      <div id="${idPrefix}-result"></div>
+      <h3 style="margin-top:18px;">Run history</h3>
+      <div id="${idPrefix}-history"></div>
+    `;
+    const recordsEl = document.getElementById(`${idPrefix}-records`);
+    let recCount = 0;
+    const addRow = () => { recCount += 1; addRecordRow(recordsEl, recCount); };
+    addRow();
+    document.getElementById(`${idPrefix}-add`).addEventListener("click", addRow);
+    document.getElementById(`${idPrefix}-run-btn`).addEventListener("click", async () => {
+      const errorEl = document.getElementById(`${idPrefix}-error`);
+      errorEl.classList.add("hidden");
+      const runName = document.getElementById(`${idPrefix}-runname`).value.trim();
+      if (!runName) { errorEl.textContent = "Enter a run name."; errorEl.classList.remove("hidden"); return; }
+      const rows = Array.from(recordsEl.children);
+      if (!rows.length) { errorEl.textContent = "Add at least one request."; errorEl.classList.remove("hidden"); return; }
+      const runBtn = document.getElementById(`${idPrefix}-run-btn`);
+      runBtn.disabled = true;
+      runBtn.textContent = "Building…";
+      try {
+        const records = [];
+        for (const row of rows) {
+          const prompt = row.querySelector(".rec-prompt").value.trim();
+          const model = row.querySelector(".rec-model").value;
+          const expected_output_tokens = parseInt(row.querySelector(".rec-output").value || "0", 10);
+          if (!prompt) continue;
+          const res = await fetch(`${API_BASE}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt, model, expected_output_tokens }),
+          });
+          const analyzeResult = await res.json();
+          if (!res.ok) throw new Error(analyzeResult.detail || "Could not analyze one of the requests.");
+          const phase = row.querySelector(".rec-phase").value.trim();
+          records.push({ ...analyzeResult, label: row.querySelector(".rec-label").value.trim() || "request", ...(phase ? { phase } : {}) });
+        }
+        if (!records.length) throw new Error("Add at least one request with a prompt.");
+        const payload = { run_name: runName, records, label: document.getElementById(`${idPrefix}-label`).value.trim() };
+        const run = await apiFetch(`/projects/${project.id}/tools/report/runs`, { method: "POST", body: JSON.stringify(payload) });
+        document.getElementById(`${idPrefix}-result`).innerHTML = renderReportResult(run.result);
+        document.getElementById(`${idPrefix}-label`).value = "";
+        await loadToolHistory(tool, project, idPrefix);
+      } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = "Build report";
+      }
+    });
+    loadToolHistory(tool, project, idPrefix);
+  }
+
   // ---------- bootstrap ----------
 
   function escapeHtml(str) {
@@ -906,6 +1283,19 @@
     const profile = await apiFetch("/profile").catch(() => ({ has_app_key: false }));
     hasAppKey = !!profile.has_app_key;
     renderAppKeyStatus();
+
+    try {
+      const res = await fetch(`${API_BASE}/models`);
+      modelsData = await res.json();
+    } catch (e) {
+      modelsData = [];
+    }
+    try {
+      const res = await fetch(`${API_BASE}/config`);
+      testMode = !!(await res.json()).test_mode;
+    } catch (e) {
+      testMode = true;
+    }
 
     await loadWorkspaces();
   }

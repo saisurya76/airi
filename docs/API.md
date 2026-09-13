@@ -519,7 +519,7 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
-## Workspaces & projects (Phase 1)
+## Workspaces & projects (Phase 1 + 2)
 
 See [docs/WORKSPACES.md](WORKSPACES.md) for the full concept, schema,
 and design rationale (the app-key delete-confirmation PIN, tech-stack
@@ -544,6 +544,15 @@ one that doesn't exist.
 | `POST /workspaces/{id}/projects` | Body `{"title", "description", "tech_stack": {...}}` — `400` if `title` is blank or `tech_stack` is missing `ai_services`/`ai_model` |
 | `GET /projects/{id}` / `PUT /projects/{id}` | Same shape as create |
 | `DELETE /projects/{id}` | Body `{"app_key": "1234"}`, same gate as deleting a workspace |
+| `POST /projects/{id}/tools/analyze/runs` | Same body as `POST /analyze` + optional `label` — runs it and saves the result |
+| `POST /projects/{id}/tools/exact/runs` | Same body as `POST /analyze/exact` + optional `label` — a BYOK key in the body is used for the call but never persisted |
+| `POST /projects/{id}/tools/project/runs` | Same body as `POST /project` + optional `label` |
+| `POST /projects/{id}/tools/report/runs` | Same body as `POST /report` + optional `label` |
+| `GET /projects/{id}/tools/{tool}/runs` | That tool's saved runs, most recent first (`tool`: `analyze`/`exact`/`project`/`report`, else `422`) |
+| `DELETE /projects/{id}/tools/{tool}/runs/{run_id}` | Body `{"app_key": "1234"}`, same delete gate |
+
+See [docs/WORKSPACES.md](WORKSPACES.md#tool-runs-phase-2-airis-tools-inside-a-project)
+for what gets stored, and why a BYOK key never does.
 
 ## `GET /download`
 

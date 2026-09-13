@@ -138,26 +138,76 @@ never confirms another user's workspace/project id is valid.
 - `DELETE /projects/{id}` — body `{"app_key": "1234"}`, same gate as
   deleting a workspace.
 
+## Tool runs (Phase 2): AIRI's tools, inside a project
+
+Each of AIRI's four existing tools is now runnable *and saved* inside a
+project, in a tab of its own on `frontend/workspaces.html`: **Standard**
+(`/analyze`), **Exact** (`/analyze/exact`), **Traffic** (`/project`,
+volume projection), and **Load Test** (`/report`, load-test reporting).
+
+Every run is stored as one row in `project_tool_runs`
+(`sql/004_project_tool_runs.sql`): which tool, an optional user-chosen
+`label`, the exact request body (`input`) and the exact response
+(`result`) — both JSONB, both shaped identically to the corresponding
+stateless endpoint. A project accumulates a *history* per tool (most
+recent first) rather than keeping only the latest run, since that
+history is what Phase 3's dashboard and Phase 4's comparison tab will
+eventually read from.
+
+**One deliberate exception to "input is stored exactly as sent"**: an
+Exact-tool run's `input` never contains `anthropic_api_key`/
+`google_api_key`, even when the request that created it carried a BYOK
+key (see docs/ADMIN.md). Those fields are stripped before the row is
+ever written — `api.py`'s `_exact_input_for_storage` is the one place
+that happens, so there's a single point to audit. A BYOK key remains
+exactly as ephemeral as it was before this feature: used for one
+provider call, never logged, never persisted, regardless of whether
+that call happened via `/analyze/exact` directly or via a saved
+project run.
+
+The four stateless endpoints (`/analyze`, `/analyze/exact`, `/project`,
+`/report`) are unaffected — this phase refactored their internals into
+shared helpers (`_do_analyze`, `_do_exact`, `_do_project`,
+`_build_report_or_400`) purely so a saved run and a plain call can
+never silently drift apart, not to change either endpoint's behavior.
+
+### API reference
+
+All require `Authorization: Bearer <session token>`; a project id
+belonging to another user returns `404`, same as elsewhere in this
+feature.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /projects/{id}/tools/analyze/runs` | Same body as `POST /analyze`, plus optional `label`. Runs it and saves the result. |
+| `POST /projects/{id}/tools/exact/runs` | Same body as `POST /analyze/exact` (BYOK fields included, never persisted), plus optional `label`. Subject to the same per-user rate limit as `/analyze/exact`. |
+| `POST /projects/{id}/tools/project/runs` | Same body as `POST /project` (an `archetypes` list), plus optional `label`. |
+| `POST /projects/{id}/tools/report/runs` | Same body as `POST /report` (`run_name` + `records`), plus optional `label`. |
+| `GET /projects/{id}/tools/{tool}/runs` | That tool's saved runs for this project, most recent first. `tool` is one of `analyze`/`exact`/`project`/`report` — anything else is a `422`. |
+| `DELETE /projects/{id}/tools/{tool}/runs/{run_id}` | Body `{"app_key": "1234"}` — same delete-confirmation gate as everything else in this feature. |
+
+Deleting a project cascades to its saved tool runs
+(`ON DELETE CASCADE`), same as it already cascades to nothing else at
+this level (members/projects cascade from workspaces, not from here).
+
 ## What's next (later phases — not in this delivery)
 
-Per the plan agreed before building this: Phase 1 is the data model,
-CRUD, and restore-on-login only. Still to come, in roughly this order:
+Per the plan agreed before building this: Phase 1 shipped the data
+model, CRUD, and restore-on-login; Phase 2 (above) made AIRI's tools
+runnable and saved inside a project. Still to come, in roughly this
+order:
 
-1. **Per-project tool tabs** — each existing AIRI tool (Standard
-   analyze, Exact mode, traffic projection, load-test report) embedded
-   and runnable inside a project, with results saved to that project
-   (a new `project_tool_runs` table).
-2. **Dashboard tab** — charts/figures built from the saved tool runs
-   above.
-3. **Notes tab** — an append-only, timestamped comment history per
+1. **Dashboard tab** — charts/figures built from the saved tool runs
+   Phase 2 now produces.
+2. **Notes tab** — an append-only, timestamped comment history per
    project (read-only list, click an entry to preview it in full).
-4. **Actions tab** — a consolidated findings report per project.
-5. **Comparison tab** — appears once a workspace has 2+ projects,
+3. **Actions tab** — a consolidated findings report per project.
+4. **Comparison tab** — appears once a workspace has 2+ projects,
    auto-updating in the background as tool runs are saved.
-6. **PDF reports** — per-tab, consolidated-per-project, and
+5. **PDF reports** — per-tab, consolidated-per-project, and
    comparison-level, each signed by the user who created the
    project/workspace (their name/email — not the site's Author/founder
    profile, which is a separate, unrelated page).
-7. **Workspace-level reporting** and **real team collaboration**
+6. **Workspace-level reporting** and **real team collaboration**
    (a member actually signing in and seeing the workspace, rather than
    just being notified) are open design questions for a later phase.

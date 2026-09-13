@@ -365,3 +365,47 @@ def delete_project(project_id: int) -> bool:
     with _cursor() as cur:
         cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
         return cur.rowcount > 0
+
+
+# ---------- project_tool_runs (workspaces feature, Phase 2) ----------
+
+_TOOL_RUN_FIELDS = "id, project_id, tool, label, input, result, created_at"
+
+
+def create_tool_run(project_id: int, tool: str, label: str, input_data: Dict[str, Any], result_data: Dict[str, Any]) -> dict:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO project_tool_runs (project_id, tool, label, input, result)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING {_TOOL_RUN_FIELDS}
+            """,
+            (project_id, tool, label, Json(input_data), Json(result_data)),
+        )
+        return cur.fetchone()
+
+
+def list_tool_runs(project_id: int, tool: str) -> List[dict]:
+    """Most recent first — that's the order a run-history list wants."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_TOOL_RUN_FIELDS} FROM project_tool_runs
+            WHERE project_id = %s AND tool = %s
+            ORDER BY created_at DESC
+            """,
+            (project_id, tool),
+        )
+        return cur.fetchall()
+
+
+def get_tool_run(run_id: int) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(f"SELECT {_TOOL_RUN_FIELDS} FROM project_tool_runs WHERE id = %s", (run_id,))
+        return cur.fetchone()
+
+
+def delete_tool_run(run_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM project_tool_runs WHERE id = %s", (run_id,))
+        return cur.rowcount > 0

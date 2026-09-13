@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, db, runtime_config, workspaces as ws
+from airi import author, db, runtime_config, tool_runs, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -90,11 +90,13 @@ def _require_session_email(authorization: Optional[str]) -> str:
         raise HTTPException(status_code=401, detail=str(exc))
 
 
-def _require_user_id(authorization: Optional[str]) -> int:
-    """Resolves the session's email to a `users.id`. A signed-in session
-    with no matching user row shouldn't happen (verify-code always
-    upserts one first) — treated as an expired/invalid session rather
-    than a 500 if it somehow does."""
+def _require_session_email_and_user_id(authorization: Optional[str]) -> Tuple[str, int]:
+    """Resolves the session's email to a `users.id`, returning both — for
+    the one caller (the Exact tool-run endpoint) that needs the email
+    too, for rate limiting. A signed-in session with no matching user
+    row shouldn't happen (verify-code always upserts one first) —
+    treated as an expired/invalid session rather than a 500 if it
+    somehow does."""
     email = _require_session_email(authorization)
     try:
         user_id = db.get_user_id_by_email(email)
@@ -102,6 +104,11 @@ def _require_user_id(authorization: Optional[str]) -> int:
         raise HTTPException(status_code=503, detail=str(exc))
     if user_id is None:
         raise HTTPException(status_code=401, detail="Your session is no longer valid — sign in again.")
+    return email, user_id
+
+
+def _require_user_id(authorization: Optional[str]) -> int:
+    _email, user_id = _require_session_email_and_user_id(authorization)
     return user_id
 
 
@@ -343,6 +350,29 @@ class ReportRequest(BaseModel):
     records: List[Dict[str, Any]] = Field(min_length=1, max_length=MAX_RECORDS)
 
 
+# --- Saved tool runs inside a project (Phase 2 — see docs/WORKSPACES.md) ---
+#
+# Same request shape as the existing stateless endpoint in each case,
+# plus one new optional field: a label for this particular saved run
+# (distinct from ReportRequest.records[].label, which labels one record
+# inside a report, not the run itself).
+
+class AnalyzeRunBody(AnalyzeRequest):
+    label: str = ""
+
+
+class ExactRunBody(ExactAnalyzeRequest):
+    label: str = ""
+
+
+class ProjectRunBody(ProjectRequest):
+    label: str = ""
+
+
+class ReportRunBody(ReportRequest):
+    label: str = ""
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -374,8 +404,22 @@ def models():
     ]
 
 
-@app.post("/analyze")
-def analyze_request(body: AnalyzeRequest):
+def _analyze_input_for_storage(body: "AnalyzeRequest") -> Dict[str, Any]:
+    """The plain-dict shape of an /analyze-style request, safe to persist
+    as-is (used both for /analyze and /analyze/exact — see
+    _exact_input_for_storage for why Exact needs its own variant)."""
+    return {
+        "prompt": body.prompt,
+        "messages": [m.model_dump() for m in body.messages] if body.messages else None,
+        "model": body.model,
+        "expected_output_tokens": body.expected_output_tokens,
+    }
+
+
+def _do_analyze(body: "AnalyzeRequest") -> dict:
+    """Shared by POST /analyze and POST /projects/{id}/tools/analyze/runs
+    — one code path so a saved run and a plain /analyze call can never
+    silently drift apart."""
     try:
         result = analyze(
             prompt=body.prompt,
@@ -386,6 +430,11 @@ def analyze_request(body: AnalyzeRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result.to_dict()
+
+
+@app.post("/analyze")
+def analyze_request(body: AnalyzeRequest):
+    return _do_analyze(body)
 
 
 @app.post("/auth/request-code")
@@ -667,6 +716,90 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
     return {"deleted": True}
 
 
+# --- Saved tool runs inside a project (Phase 2 — see docs/WORKSPACES.md) ---
+#
+# Each of AIRI's four existing tools (Standard analyze, Exact mode,
+# traffic projection, load-test report) becomes runnable *and saved*
+# inside a project — same request/response shape as the original
+# stateless endpoint (via the _do_analyze/_do_exact/_do_project/
+# _build_report_or_400 helpers above and below), plus persistence.
+# `_do_exact` and `_resolve_exact_api_key` are defined further down,
+# right before /analyze/exact — Python resolves names inside a function
+# body at call time, so the forward reference is fine.
+
+
+@app.post("/projects/{project_id}/tools/analyze/runs")
+def create_analyze_run(project_id: int, body: AnalyzeRunBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    try:
+        label = tool_runs.validate_label(body.label)
+    except tool_runs.ToolRunError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result = _do_analyze(body)
+    return db.create_tool_run(project_id, tool_runs.ToolName.analyze.value, label, _analyze_input_for_storage(body), result)
+
+
+@app.post("/projects/{project_id}/tools/exact/runs")
+def create_exact_run(project_id: int, body: ExactRunBody, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    _check_exact_rate_limit(email)
+    try:
+        label = tool_runs.validate_label(body.label)
+    except tool_runs.ToolRunError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    test_mode, _source = runtime_config.get_test_mode()
+    result = _do_exact(body, test_mode)
+    # Never persists anthropic_api_key/google_api_key even if this
+    # request carried a BYOK key — see _exact_input_for_storage.
+    return db.create_tool_run(project_id, tool_runs.ToolName.exact.value, label, _exact_input_for_storage(body), result)
+
+
+@app.post("/projects/{project_id}/tools/project/runs")
+def create_project_run(project_id: int, body: ProjectRunBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    try:
+        label = tool_runs.validate_label(body.label)
+    except tool_runs.ToolRunError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result = _do_project(body)
+    return db.create_tool_run(project_id, tool_runs.ToolName.project.value, label, _project_input_for_storage(body), result)
+
+
+@app.post("/projects/{project_id}/tools/report/runs")
+def create_report_run(project_id: int, body: ReportRunBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    try:
+        label = tool_runs.validate_label(body.label)
+    except tool_runs.ToolRunError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    report = _build_report_or_400(body)
+    input_data = {"run_name": body.run_name, "records": body.records}
+    return db.create_tool_run(project_id, tool_runs.ToolName.report.value, label, input_data, report.to_dict())
+
+
+@app.get("/projects/{project_id}/tools/{tool}/runs")
+def list_project_tool_runs(project_id: int, tool: tool_runs.ToolName, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    return db.list_tool_runs(project_id, tool.value)
+
+
+@app.delete("/projects/{project_id}/tools/{tool}/runs/{run_id}")
+def delete_project_tool_run(project_id: int, tool: tool_runs.ToolName, run_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    run = db.get_tool_run(run_id)
+    if run is None or run["project_id"] != project_id or run["tool"] != tool.value:
+        raise HTTPException(status_code=404, detail="Tool run not found.")
+    _require_app_key_confirmed(user_id, body.app_key)
+    db.delete_tool_run(run_id)
+    return {"deleted": True}
+
+
 def _resolve_exact_api_key(body: "ExactAnalyzeRequest", provider: str, test_mode: bool) -> str:
     """Picks which provider key an /analyze/exact call should use.
 
@@ -767,32 +900,18 @@ def admin_set_author(body: AuthorProfileBody, authorization: Optional[str] = Hea
     return saved
 
 
-@app.post("/analyze/exact")
-def analyze_exact(body: ExactAnalyzeRequest, authorization: Optional[str] = Header(default=None)):
-    """
-    Same request/response shape as /analyze, but for Anthropic/Google
-    models it calls that provider's own (free, no-charge) token-counting
-    API instead of the chars/4 heuristic — see airi/exact_provider.py.
-    OpenAI models are already exact via tiktoken locally, so this just
-    delegates to the same path /analyze uses for those.
+def _exact_input_for_storage(body: "ExactAnalyzeRequest") -> Dict[str, Any]:
+    """Same shape as _analyze_input_for_storage but deliberately does NOT
+    include anthropic_api_key/google_api_key — a BYOK key must never be
+    written to the database, even inside a saved tool-run's `input`."""
+    return _analyze_input_for_storage(body)
 
-    Requires a signed-in session (`Authorization: Bearer <token>` from
-    /auth/verify-code). While this deployment is in "test mode" (see
-    GET /config and docs/ADMIN.md), Exact calls out using AIRI's own
-    shared provider API keys, so sign-in exists to keep that shared
-    quota from being hammered by anonymous traffic. Once test mode is
-    off, each signed-in user supplies their own key (BYOK) in the
-    request body — AIRI never stores it.
-    """
-    secret = _get_auth_secret()
-    try:
-        email = verify_session_token(extract_bearer_token(authorization), secret)
-    except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    _check_exact_rate_limit(email)
 
-    test_mode, _source = runtime_config.get_test_mode()
-
+def _do_exact(body: "ExactAnalyzeRequest", test_mode: bool) -> dict:
+    """Shared by POST /analyze/exact and POST /projects/{id}/tools/exact/runs
+    — everything after auth + rate limiting, which each caller still does
+    itself (the per-project endpoint needs its own ownership check first
+    anyway, so there's no single shared auth wrapper for this one)."""
     messages = [m.model_dump() for m in body.messages] if body.messages else None
     spec = get_model_spec(body.model)
 
@@ -831,16 +950,35 @@ def analyze_exact(body: ExactAnalyzeRequest, authorization: Optional[str] = Head
     return result.to_dict()
 
 
-@app.post("/project")
-def project_request(body: ProjectRequest):
+@app.post("/analyze/exact")
+def analyze_exact(body: ExactAnalyzeRequest, authorization: Optional[str] = Header(default=None)):
     """
-    Volume projection: given several distinct AI call-sites in your app,
-    each with a representative sample request, a target model, and a
-    volume you supply (from your own analytics or projections), returns
-    per-archetype and grand-total tokens/cost. See airi/projector.py —
-    AIRI doesn't guess volume, it only does the multiplication once you
-    provide it.
+    Same request/response shape as /analyze, but for Anthropic/Google
+    models it calls that provider's own (free, no-charge) token-counting
+    API instead of the chars/4 heuristic — see airi/exact_provider.py.
+    OpenAI models are already exact via tiktoken locally, so this just
+    delegates to the same path /analyze uses for those.
+
+    Requires a signed-in session (`Authorization: Bearer <token>` from
+    /auth/verify-code). While this deployment is in "test mode" (see
+    GET /config and docs/ADMIN.md), Exact calls out using AIRI's own
+    shared provider API keys, so sign-in exists to keep that shared
+    quota from being hammered by anonymous traffic. Once test mode is
+    off, each signed-in user supplies their own key (BYOK) in the
+    request body — AIRI never stores it.
     """
+    email = _require_session_email(authorization)
+    _check_exact_rate_limit(email)
+    test_mode, _source = runtime_config.get_test_mode()
+    return _do_exact(body, test_mode)
+
+
+def _project_input_for_storage(body: "ProjectRequest") -> Dict[str, Any]:
+    return {"archetypes": [a.model_dump() for a in body.archetypes]}
+
+
+def _do_project(body: "ProjectRequest") -> dict:
+    """Shared by POST /project and POST /projects/{id}/tools/project/runs."""
     try:
         archetypes = [
             Archetype(
@@ -857,6 +995,19 @@ def project_request(body: ProjectRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result.to_dict()
+
+
+@app.post("/project")
+def project_request(body: ProjectRequest):
+    """
+    Volume projection: given several distinct AI call-sites in your app,
+    each with a representative sample request, a target model, and a
+    volume you supply (from your own analytics or projections), returns
+    per-archetype and grand-total tokens/cost. See airi/projector.py —
+    AIRI doesn't guess volume, it only does the multiplication once you
+    provide it.
+    """
+    return _do_project(body)
 
 
 def _build_report_or_400(body: ReportRequest):
