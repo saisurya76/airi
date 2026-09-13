@@ -20,6 +20,7 @@ from .analyzer import analyze
 from .models import AnalysisResult
 from .projector import Archetype, ProjectionResult, project
 from .registry import list_supported_models
+from .report import RunReport, build_report
 
 __all__ = [
     "analyze",
@@ -28,5 +29,7 @@ __all__ = [
     "project",
     "Archetype",
     "ProjectionResult",
+    "build_report",
+    "RunReport",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

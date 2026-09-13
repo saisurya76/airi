@@ -207,6 +207,74 @@ doesn't track usage over time on its own (see the README's note on
 why this is deliberately different from usage-tracking/prediction
 features).
 
+## Load-test token usage reporting
+
+Once AIRI is wired into your service calls (the pattern above), a
+load-test run against those services can report token usage and cost
+alongside whatever your test suite already reports (CPU, memory,
+latency) — because every call already produces an `/analyze` result.
+AIRI adds nothing to *how* you load-test; it just consolidates results
+you already have at the end of the run.
+
+**The pattern, for any test suite in any language:**
+
+```
+your load-test suite runs  →  each guarded call returns an AIRI result
+                            →  your harness tags it (label, phase, timestamp) and keeps it
+                            →  at the end of the run, POST the whole list to /report(+/html,+/pdf)
+```
+
+Nothing to install beyond what you already integrated — this reuses
+the exact `/analyze` result shape, tagged with three extra fields.
+
+**Python** (harness collecting results as a k6/Locust/pytest-style run executes):
+
+```python
+import requests
+from datetime import datetime, timezone
+
+AIRI_URL = "http://localhost:8000"
+records = []
+
+def guarded_call(prompt, model, expected_output_tokens, label, phase="normal"):
+    """Wraps the pattern from 'Option A' above, but also keeps the
+    result for a report at the end of the run."""
+    check = requests.post(
+        f"{AIRI_URL}/analyze",
+        json={"prompt": prompt, "model": model, "expected_output_tokens": expected_output_tokens},
+        timeout=60,
+    ).json()
+    records.append({**check, "label": label, "phase": phase, "timestamp": datetime.now(timezone.utc).isoformat()})
+    if check["status"] == "EXCEEDED":
+        raise ValueError(f"{label}: request would exceed {model}'s context window")
+    return check
+
+# ... run your normal-load scenario, then your peak-load scenario,
+# calling guarded_call(..., phase="normal") / phase="peak") throughout ...
+
+# At the end of the run:
+report = requests.post(f"{AIRI_URL}/report", json={"run_name": "Nightly load test", "records": records}).json()
+print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {report['status_counts']}")
+
+# Or get a ready-to-share PDF:
+pdf = requests.post(f"{AIRI_URL}/report/pdf", json={"run_name": "Nightly load test", "records": records})
+open("load_test_report.pdf", "wb").write(pdf.content)
+```
+
+**Any other language**: the same shape works from k6 (collect results
+in a JS array during the run, `http.post` them to `/report` in a
+`handleSummary()` at the end), JMeter (a post-processor appends each
+result to a shared list, then a teardown thread group posts it), or a
+plain shell script piping `curl` output into a JSON array — the only
+requirement is collecting the `/analyze` results (tagged with
+`label`/`phase`/`timestamp`) as the run executes, then submitting the
+full list once. Full request/response reference, including error
+cases and the exact record schema: [docs/API.md](API.md#post-report-post-reporthtml-post-reportpdf).
+
+There's no run ID and nothing is stored server-side — if you want to
+keep a run's report, save the JSON/HTML/PDF response yourself; AIRI
+doesn't track history across runs (same reasoning as `/project`, above).
+
 ## Summary
 
 - In-process Python → `from airi import analyze` — no network hop.
@@ -216,5 +284,8 @@ features).
 - Check `confidence` too — heuristic estimates deserve a safety margin.
 - Use `/project` for planning, not per-request gating — it needs a
   volume number you supply, not a live request.
+- During a load test, tag and collect each guarded call's result, then
+  submit the whole run once to `/report` (or `/report/html`/`/report/pdf`)
+  for a consolidated token/cost report — any language, any test tool.
 - Never point another application's production traffic at the public
   demo host.

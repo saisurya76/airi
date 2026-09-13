@@ -7,16 +7,20 @@ try-it-out page as a static file. Run it with:
 Then open http://127.0.0.1:8000/
 """
 
-from typing import List, Optional
+import io
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from airi import Archetype, analyze, list_supported_models, project
+from airi import Archetype, analyze, build_report, list_supported_models, project
 from airi.projector import MAX_ARCHETYPES
 from airi.registry import MODEL_REGISTRY
+from airi.report import MAX_RECORDS
+from airi.report_render import render_report_html
 
 app = FastAPI(
     title="AIRI — AI Request Intelligence",
@@ -83,6 +87,20 @@ class ProjectRequest(BaseModel):
     archetypes: List[ArchetypeRequest] = Field(min_length=1, max_length=MAX_ARCHETYPES)
 
 
+class ReportRequest(BaseModel):
+    """
+    A load-test report is built from records your own test harness
+    already has — one per AI request, in the exact shape `/analyze`
+    returns, plus a `label` (required) and optional `phase`/`timestamp`.
+    Collect these as you run your suite (in any language), then submit
+    everything you collected in one call at the end of the run. See
+    docs/INTEGRATION.md#load-test-token-usage-reporting.
+    """
+
+    run_name: str = Field(min_length=1, max_length=200)
+    records: List[Dict[str, Any]] = Field(min_length=1, max_length=MAX_RECORDS)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -142,6 +160,60 @@ def project_request(body: ProjectRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result.to_dict()
+
+
+def _build_report_or_400(body: ReportRequest):
+    try:
+        return build_report(body.run_name, body.records)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/report")
+def report_json(body: ReportRequest):
+    """
+    Consolidate a load-test run's per-request /analyze results into one
+    report: totals, cost, a SAFE/WARNING/EXCEEDED breakdown, per-label
+    and per-model and per-phase rollups, the peak single request, and
+    the worst-offending flagged requests. Fully stateless — nothing is
+    stored; submit every record you collected in one call, get one
+    report back. See docs/INTEGRATION.md for the record shape and a
+    worked example from any test suite.
+    """
+    return _build_report_or_400(body).to_dict()
+
+
+@app.post("/report/html", response_class=HTMLResponse)
+def report_html(body: ReportRequest):
+    """Same report as POST /report, rendered as a single self-contained
+    HTML page — for embedding in a viewer (e.g. an iframe) or opening
+    directly in a browser."""
+    report = _build_report_or_400(body)
+    return HTMLResponse(content=render_report_html(report))
+
+
+@app.post("/report/pdf")
+def report_pdf(body: ReportRequest):
+    """Same report, rendered to a downloadable PDF — the same HTML
+    template as POST /report/html, converted via xhtml2pdf so the two
+    always agree."""
+    report = _build_report_or_400(body)
+    html = render_report_html(report)
+
+    from xhtml2pdf import pisa  # imported here: only /report/pdf needs it
+
+    buffer = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buffer)
+    if result.err:
+        raise HTTPException(status_code=500, detail="Could not render PDF for this report.")
+
+    pdf_bytes = buffer.getvalue()
+    filename = "".join(c if c.isalnum() or c in "-_ " else "_" for c in report.run_name).strip() or "airi-report"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
+    )
 
 
 # Serve the try-it-out page at "/". Mounted last so it doesn't shadow the

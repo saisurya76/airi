@@ -316,6 +316,117 @@ errors.
 
 ---
 
+## `POST /report`, `POST /report/html`, `POST /report/pdf`
+
+Consolidate a load-test run's per-request `/analyze` results into one
+report — see the README's "Load-test token usage reporting" for the
+concept and end-to-end flow. All three endpoints take the identical
+request body and differ only in response format. Fully stateless:
+nothing you submit is stored; submit everything your test harness
+collected in one call, get one report back.
+
+**Request body**
+
+```json
+{
+  "run_name": "Nightly load test — checkout flow",
+  "records": [
+    {
+      "model": "gpt-4o-mini",
+      "input_tokens": 42,
+      "estimated_output_tokens": 120,
+      "estimated_total_tokens": 162,
+      "context_window": 128000,
+      "context_utilization": 0.0013,
+      "estimated_cost": 0.0000957,
+      "method": "tokenizer",
+      "confidence": "high",
+      "status": "SAFE",
+      "known_model": true,
+      "label": "checkout-summary",
+      "phase": "normal",
+      "timestamp": "2026-09-13T10:00:05Z"
+    }
+  ]
+}
+```
+
+| field | type | required | notes |
+|---|---|---|---|
+| `run_name` | string, 1–200 chars | yes | a label for this run |
+| `records` | array, 1–20,000 entries | yes | one entry per AI request made during the run |
+
+Each entry in `records` is exactly the shape `/analyze` returns
+(`model`, `input_tokens`, `estimated_output_tokens`,
+`estimated_total_tokens`, `context_window`, `context_utilization`,
+`estimated_cost`, `method`, `confidence`, `status`, `known_model`) —
+literally what your harness already has from calling `/analyze` during
+the run — plus:
+
+| field | type | required | notes |
+|---|---|---|---|
+| `label` | string | yes | which service/call-site this request was |
+| `phase` | string | no | a freeform tag, e.g. `"normal"` or `"peak"`; omitted entries are grouped under `"unspecified"` |
+| `timestamp` | string (ISO 8601) | no | when the request happened — supply it on at least 2 records to get `duration_seconds`/`requests_per_second` in the report |
+
+`records` accepts extra fields beyond these too (they're ignored) — you
+can pass your raw `/analyze` response objects straight through after
+adding `label`/`phase`/`timestamp`, no need to strip anything.
+
+### `POST /report` — JSON summary
+
+**Response 200**
+
+```json
+{
+  "run_name": "Nightly load test — checkout flow",
+  "generated_at": "2026-09-13T15:39:20.415774+00:00",
+  "total_requests": 16,
+  "total_input_tokens": 9412,
+  "total_output_tokens": 1580,
+  "total_tokens": 26733,
+  "total_cost": 0.78617,
+  "avg_tokens_per_request": 1670.8,
+  "avg_cost_per_request": 0.049136,
+  "peak_request": { "...": "the full record with the highest estimated_total_tokens" },
+  "status_counts": { "SAFE": 15, "WARNING": 0, "EXCEEDED": 1 },
+  "by_model": { "gpt-4o-mini": { "count": 8, "tokens": 1600, "cost": 0.012 } },
+  "by_label": { "checkout-summary": { "count": 8, "tokens": 1600, "cost": 0.012, "SAFE": 8, "WARNING": 0, "EXCEEDED": 0 } },
+  "by_phase": { "normal": { "count": 10, "tokens": 2000, "cost": 0.015 }, "peak": { "count": 6, "tokens": 24733, "cost": 0.771 } },
+  "flagged_requests": [ "...records with status WARNING or EXCEEDED, worst first, capped at 50" ],
+  "flagged_truncated": false,
+  "duration_seconds": 16.0,
+  "requests_per_second": 1.0
+}
+```
+
+`peak_request` and `flagged_requests` entries carry the full record you
+submitted (including `label`/`phase`/`timestamp`). `duration_seconds`/
+`requests_per_second` are `null` when fewer than 2 records have a
+parseable `timestamp`.
+
+### `POST /report/html` — rendered HTML page
+
+Same data, returned as `text/html`: a single self-contained page (no
+external CSS/JS/fonts) suitable for embedding in an `<iframe>` or
+opening directly in a browser.
+
+### `POST /report/pdf` — downloadable PDF
+
+Same page, converted to `application/pdf` via `xhtml2pdf` and returned
+with `Content-Disposition: attachment; filename="<run_name>.pdf"` —
+open it directly or save it. The HTML and PDF come from the identical
+template (`airi/report_render.py`), so they always agree.
+
+**Errors** (all three endpoints)
+
+- `400` — `{"detail": "..."}` — empty `records`, more than 20,000
+  records, a record missing a required field (named in the message), or
+  an unrecognized `status` value. AIRI's own validation.
+- `422` — pydantic request-shape errors (`run_name` blank/too long,
+  `records` not a list of objects).
+- `500` (`/report/pdf` only) — PDF rendering failed unexpectedly.
+
 ## Cold starts (demo host only)
 
 If you're hitting `https://airi-mvp-api.onrender.com`, Render's free

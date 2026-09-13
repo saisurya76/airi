@@ -16,7 +16,7 @@ build intentionally skips.
   own AI request pipeline as a pre-flight SEND/MODIFY/REJECT check,
   from Python or any other language over HTTP.
 - **[docs/API.md](docs/API.md)** — full reference for every endpoint
-  (`/analyze`, `/project`, `/models`, `/health`): request/response
+  (`/analyze`, `/project`, `/report`, `/models`, `/health`): request/response
   schemas and error formats.
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
@@ -63,8 +63,8 @@ result = analyze(prompt="Explain quantum computing simply.", model="gpt-4o", exp
 print(result.to_dict())
 ```
 
-Run the sanity tests any time with `python3 tests/test_analyzer.py` and
-`python3 tests/test_projector.py`.
+Run the sanity tests any time with `python3 tests/test_analyzer.py`,
+`python3 tests/test_projector.py`, and `python3 tests/test_report.py`.
 
 ## Project layout
 
@@ -72,13 +72,16 @@ Run the sanity tests any time with `python3 tests/test_analyzer.py` and
 airi/                   core library — zero web/db/cloud dependencies
   analyzer.py             analyze() — per-request estimate
   projector.py             project() — multi-archetype volume projection, built on analyze()
+  report.py                 build_report() — consolidate a load-test run's analyze() results
+  report_render.py            render_report_html() — one HTML template, also fed to xhtml2pdf
   tokenizer.py              exact counts (tiktoken) with heuristic fallback
   pricing.py                 cost = tokens x registry price
   registry.py                  model -> context window, price, tokenizer family
   models.py                     AnalysisResult
-api.py                  FastAPI: POST /analyze, POST /project, GET /models, GET /health
-frontend/index.html    try-it-out page (vanilla HTML/CSS/JS, no build step)
-tests/                  sanity checks for analyzer.py and projector.py
+api.py                  FastAPI: POST /analyze, POST /project, POST /report(+/html,+/pdf), GET /models, GET /health
+frontend/index.html    try-it-out page (analyze + traffic projection + load-test demo)
+frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
+tests/                  sanity checks for analyzer.py, projector.py, and report.py
 docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration guide)
 ```
 
@@ -161,6 +164,58 @@ This is deliberately not the same thing as the frozen spec's P7
 traffic over time. This is simpler and stays honest about its inputs:
 you supply the volume assumption, it does the arithmetic. No tracking,
 no history, still fully stateless.
+
+## Load-test token usage reporting
+
+A load-testing tool reports CPU, memory, latency — but nothing about
+what a run would actually cost against a real model, because it has no
+idea what an "AI request" even is. AIRI does, if it's already wired
+into the service calls being load-tested (see **Integrating AIRI**
+above): every call your test suite makes already produces an
+`/analyze` result. `build_report()` (or `POST /report`) just
+consolidates whatever your harness collected during the run into one
+report — same "you supply the numbers, AIRI does the arithmetic"
+pattern as `project()`, extended to results you already have instead
+of a volume you're estimating.
+
+The flow, matching how a testing team actually works:
+
+1. Dev team integrates `analyze()`/`/analyze` into the service calls
+   being load-tested (per [docs/INTEGRATION.md](docs/INTEGRATION.md)).
+2. Testing team runs their suite — any tool, any language (k6, JMeter,
+   Locust, a homegrown script) — across normal and peak load scenarios.
+3. Each time the suite calls a guarded service, it already gets back an
+   AIRI result; the harness tags it with a `label` (which service) and
+   optionally a `phase` (`"normal"`/`"peak"`) and `timestamp`, and keeps
+   the list.
+4. At the end of the run, `POST` the whole list once to `/report` (JSON
+   summary), `/report/html` (a rendered page), or `/report/pdf` (a
+   downloadable, professional PDF — same template as the HTML view, via
+   `xhtml2pdf`).
+
+```python
+import requests
+
+AIRI_URL = "http://localhost:8000"
+
+records = []  # append one /analyze result per request, tagged, as your run executes
+# records.append({**analyze_result, "label": "checkout-summary", "phase": "peak", "timestamp": "2026-09-13T10:00:05Z"})
+
+resp = requests.post(f"{AIRI_URL}/report", json={"run_name": "Nightly load test — checkout flow", "records": records})
+report = resp.json()
+print(report["total_requests"], report["total_cost"], report["status_counts"])
+```
+
+The report gives totals, an average per request, a SAFE/WARNING/EXCEEDED
+breakdown, rollups by label/model/phase, the single peak request, and a
+list of the worst-offending flagged requests — nothing is stored on the
+server, so run it as many times as you like with whatever you collected.
+The try-it page's third section ("Load-test token usage report") is a
+self-contained demo of the whole flow — it simulates a couple of
+services under normal/peak load, calls the real API, and hands off to
+`frontend/report.html` to show the HTML report plus a "Download PDF"
+button. Full endpoint reference (record shape, size limits, error
+cases): [docs/API.md](docs/API.md).
 
 ## Tokenizer accuracy
 

@@ -245,6 +245,53 @@
       <div id="exceededNote" class="error hidden" style="margin-top:12px;"></div>
       <div class="model-breakdown" id="modelBreakdown"></div>
     </div>
+
+    <h2>Load-test token usage report (demo)</h2>
+    <p class="sub">
+      Real flow: your team integrates AIRI's <code>/analyze</code> into your service calls, your
+      test suite runs normal and peak load scenarios (any language, any tool — k6, JMeter, Locust,
+      your own scripts), and each call's AIRI result gets tagged with a label and collected. At the
+      end of the run, submit everything you collected to <code>/report</code> and get back one
+      consolidated report — a downloadable, professional PDF included. No accounts, no server-side
+      storage: you submit the records, AIRI does the arithmetic. This section simulates that whole
+      flow so you can see the report it produces — pick a couple of services below and run it.
+    </p>
+
+    <div class="panel">
+      <label for="runName">Run name</label>
+      <input id="runName" type="text" value="Nightly load test — checkout flow" />
+
+      <div id="serviceList" style="margin-top:14px;"></div>
+      <button id="addServiceBtn" class="secondary-btn">+ Add service</button>
+      <button id="runLoadTestBtn">Run simulated load test</button>
+      <div id="loadTestError" class="error hidden"></div>
+    </div>
+
+    <div id="loadTestSummary" class="panel hidden">
+      <div class="result-grid">
+        <div class="stat">
+          <div class="label">Total requests</div>
+          <div class="value" id="ltTotalRequests">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Total tokens</div>
+          <div class="value" id="ltTotalTokens">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Total cost</div>
+          <div class="value" id="ltTotalCost">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Simulated duration</div>
+          <div class="value" id="ltDuration">—</div>
+        </div>
+      </div>
+      <div class="model-breakdown" id="ltStatusChips" style="margin-top:16px;"></div>
+      <a id="openReportBtn" href="report.html" target="_blank" rel="noopener" style="text-decoration:none;">
+        <button type="button">Open full report →</button>
+      </a>
+      <p class="meta">Opens in a new tab: the full HTML report, plus a "Download PDF" button.</p>
+    </div>
   </div>
 
 <script>
@@ -495,6 +542,198 @@
   projectBtn.addEventListener("click", runProjection);
   analyzeBtn.addEventListener("click", runAnalysis);
 
+  // ---------- Load-test token usage report (demo) ----------
+
+  const REPORT_STORAGE_KEY = "airi_demo_report_payload";
+  const MAX_SIMULATED_REQUESTS = 2000;
+  const SIMULATED_WINDOW_MS = 5 * 60 * 1000; // spread synthetic timestamps across a 5-minute window
+
+  const serviceList = document.getElementById("serviceList");
+  const loadTestError = document.getElementById("loadTestError");
+  const loadTestSummary = document.getElementById("loadTestSummary");
+  const runLoadTestBtn = document.getElementById("runLoadTestBtn");
+  let serviceCounter = 0;
+
+  function addServiceRow(prefill) {
+    prefill = prefill || {};
+    const id = serviceCounter++;
+    const card = document.createElement("div");
+    card.className = "archetype-card";
+    card.dataset.serviceId = id;
+    card.innerHTML = `
+      <button type="button" class="remove-btn" data-remove>Remove</button>
+      <div class="row name-volume">
+        <div>
+          <label>Service / call-site name</label>
+          <input type="text" class="service-name" value="${prefill.name || ""}" placeholder="e.g. checkout-summary" />
+        </div>
+        <div>
+          <label>Model</label>
+          <select class="service-model" data-preferred-model="${prefill.model || "gpt-4o-mini"}">${modelOptionsHtml(prefill.model || "gpt-4o-mini")}</select>
+        </div>
+      </div>
+      <label style="margin-top:12px;">Sample prompt (normal load)</label>
+      <textarea class="service-prompt" placeholder="A typical request to this service.">${prefill.prompt || ""}</textarea>
+      <div class="row">
+        <div>
+          <label>Expected output tokens</label>
+          <input type="number" class="service-output" min="0" value="${prefill.expected_output_tokens != null ? prefill.expected_output_tokens : 150}" />
+        </div>
+        <div>
+          <label>Peak load multiplier (prompt repeated N×)</label>
+          <input type="number" class="service-peak-mult" min="1" max="10" value="${prefill.peakMultiplier || 3}" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Requests — normal load</label>
+          <input type="number" class="service-normal-count" min="0" value="${prefill.normalCount != null ? prefill.normalCount : 40}" />
+        </div>
+        <div>
+          <label>Requests — peak load</label>
+          <input type="number" class="service-peak-count" min="0" value="${prefill.peakCount != null ? prefill.peakCount : 15}" />
+        </div>
+      </div>
+    `;
+    serviceList.appendChild(card);
+  }
+
+  serviceList.addEventListener("click", (e) => {
+    if (e.target.matches("[data-remove]")) {
+      e.target.closest(".archetype-card").remove();
+    }
+  });
+
+  document.getElementById("addServiceBtn").addEventListener("click", () => addServiceRow());
+
+  function collectServices() {
+    return Array.from(serviceList.querySelectorAll(".archetype-card")).map((card) => ({
+      name: card.querySelector(".service-name").value.trim() || "Untitled service",
+      prompt: card.querySelector(".service-prompt").value,
+      model: card.querySelector(".service-model").value,
+      expected_output_tokens: parseInt(card.querySelector(".service-output").value || "0", 10),
+      peakMultiplier: Math.max(1, parseInt(card.querySelector(".service-peak-mult").value || "1", 10)),
+      normalCount: Math.max(0, parseInt(card.querySelector(".service-normal-count").value || "0", 10)),
+      peakCount: Math.max(0, parseInt(card.querySelector(".service-peak-count").value || "0", 10)),
+    }));
+  }
+
+  async function fetchAnalyze(prompt, model, expected_output_tokens) {
+    const res = await fetch(`${API_BASE}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, model, expected_output_tokens }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Request failed.");
+    return data;
+  }
+
+  function tagRecord(result, label, phase, startTime, index, total) {
+    // A real test harness stamps each request as it happens; here we
+    // spread synthetic timestamps evenly so the report's throughput
+    // numbers (requests/second, duration) have something real to compute.
+    const ts = new Date(startTime + (total > 1 ? (index / (total - 1)) * SIMULATED_WINDOW_MS : 0));
+    return { ...result, label, phase, timestamp: ts.toISOString() };
+  }
+
+  async function runLoadTest() {
+    loadTestError.classList.add("hidden");
+    loadTestSummary.classList.add("hidden");
+
+    const runName = document.getElementById("runName").value.trim() || "Simulated load test";
+    const services = collectServices();
+
+    if (services.length === 0) {
+      loadTestError.textContent = "Add at least one service.";
+      loadTestError.classList.remove("hidden");
+      return;
+    }
+    const missingPrompt = services.find((s) => !s.prompt.trim());
+    if (missingPrompt) {
+      loadTestError.textContent = `"${missingPrompt.name}" needs a sample prompt.`;
+      loadTestError.classList.remove("hidden");
+      return;
+    }
+    const totalRequests = services.reduce((sum, s) => sum + s.normalCount + s.peakCount, 0);
+    if (totalRequests === 0) {
+      loadTestError.textContent = "Set at least one request (normal or peak) for a service.";
+      loadTestError.classList.remove("hidden");
+      return;
+    }
+    if (totalRequests > MAX_SIMULATED_REQUESTS) {
+      loadTestError.textContent = `That's ${totalRequests.toLocaleString()} simulated requests — keep this demo under ${MAX_SIMULATED_REQUESTS.toLocaleString()} total. (A real run submitted via the API isn't limited like this.)`;
+      loadTestError.classList.remove("hidden");
+      return;
+    }
+
+    runLoadTestBtn.disabled = true;
+    runLoadTestBtn.textContent = "Running simulated load test…";
+
+    try {
+      const records = [];
+      const startTime = Date.now();
+      let recordIndex = 0;
+
+      for (const svc of services) {
+        // One real /analyze call per phase = the representative sample for
+        // that phase (same idea as "Traffic projection" above: AIRI checks
+        // one request shape, your own harness supplies how many happened).
+        // Peak load is simulated as a longer accumulated prompt/context.
+        const normalResult = await fetchAnalyze(svc.prompt, svc.model, svc.expected_output_tokens);
+        const peakPrompt = svc.peakMultiplier > 1
+          ? Array(svc.peakMultiplier).fill(svc.prompt).join("\n\n")
+          : svc.prompt;
+        const peakResult = await fetchAnalyze(peakPrompt, svc.model, svc.expected_output_tokens);
+
+        for (let i = 0; i < svc.normalCount; i++) {
+          records.push(tagRecord(normalResult, svc.name, "normal", startTime, recordIndex++, totalRequests));
+        }
+        for (let i = 0; i < svc.peakCount; i++) {
+          records.push(tagRecord(peakResult, svc.name, "peak", startTime, recordIndex++, totalRequests));
+        }
+      }
+
+      const reportResp = await fetch(`${API_BASE}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_name: runName, records }),
+      });
+      const reportData = await reportResp.json();
+      if (!reportResp.ok) throw new Error(typeof reportData.detail === "string" ? reportData.detail : "Report generation failed.");
+
+      renderLoadTestSummary(reportData);
+
+      try {
+        sessionStorage.setItem(REPORT_STORAGE_KEY, JSON.stringify({ run_name: runName, records }));
+      } catch (storageErr) {
+        console.warn("Could not save report payload to sessionStorage:", storageErr);
+      }
+    } catch (e) {
+      loadTestError.textContent = e.message;
+      loadTestError.classList.remove("hidden");
+    } finally {
+      runLoadTestBtn.disabled = false;
+      runLoadTestBtn.textContent = "Run simulated load test";
+    }
+  }
+
+  function renderLoadTestSummary(r) {
+    document.getElementById("ltTotalRequests").textContent = r.total_requests.toLocaleString();
+    document.getElementById("ltTotalTokens").textContent = r.total_tokens.toLocaleString();
+    document.getElementById("ltTotalCost").textContent = fmtMoney(r.total_cost);
+    document.getElementById("ltDuration").textContent = r.duration_seconds != null ? `${r.duration_seconds.toFixed(1)}s` : "—";
+
+    const chips = document.getElementById("ltStatusChips");
+    chips.innerHTML = ["SAFE", "WARNING", "EXCEEDED"]
+      .map((status) => `<span class="model-chip"><span class="status-badge status-${status}" style="margin-right:6px;">${status}</span><b>${(r.status_counts[status] || 0).toLocaleString()}</b></span>`)
+      .join("");
+
+    loadTestSummary.classList.remove("hidden");
+  }
+
+  runLoadTestBtn.addEventListener("click", runLoadTest);
+
   // Load the real model list first, then seed the example rows — avoids a
   // flash where their dropdowns briefly only offer the "gpt-4o" fallback
   // before the real list arrives.
@@ -512,6 +751,25 @@
       prompt: "Summarize this document for the user in three bullet points.",
       model: "claude-3-5-sonnet",
       expected_output_tokens: 300,
+    });
+
+    addServiceRow({
+      name: "checkout-summary",
+      prompt: "Summarize this customer's order for a confirmation email: 2x Wireless Mouse, 1x USB-C Hub, shipping to Goa, India.",
+      model: "gpt-4o-mini",
+      expected_output_tokens: 120,
+      peakMultiplier: 3,
+      normalCount: 40,
+      peakCount: 15,
+    });
+    addServiceRow({
+      name: "support-chat-reply",
+      prompt: "You are a helpful support agent. Customer: My order hasn't arrived yet, what's the status?",
+      model: "gpt-4o",
+      expected_output_tokens: 150,
+      peakMultiplier: 4,
+      normalCount: 30,
+      peakCount: 10,
     });
   });
 </script>

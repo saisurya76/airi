@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Load-test report</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  .top-bar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .top-bar a.back-link { color: var(--accent); text-decoration: none; font-size: 13px; }
+  .top-bar a.back-link:hover { text-decoration: underline; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0; font-size: 13px; }
+  code {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+  }
+  button, .btn {
+    background: var(--accent);
+    color: #0f1115;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    white-space: nowrap;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .error {
+    color: var(--exceeded);
+    font-size: 13px;
+    margin: 0 0 16px;
+    background: rgba(242,85,90,0.1);
+    border: 1px solid rgba(242,85,90,0.3);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .frame-wrap {
+    background: #ffffff;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  iframe { width: 100%; min-height: 600px; border: none; display: block; background: #fff; }
+  .empty-state {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 40px 32px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .empty-state p { margin: 0 0 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <div>
+        <h1 id="pageTitle">AIRI — Load-test token usage report</h1>
+        <p class="sub">Rendered from records submitted to <code>POST /report</code> — this page reads nothing but what your test run just generated; AIRI stores nothing server-side.</p>
+      </div>
+      <div class="actions">
+        <button id="downloadPdfBtn" class="hidden">Download PDF</button>
+        <a class="back-link" href="index.html">← Back to demo</a>
+      </div>
+    </div>
+
+    <div id="errorBox" class="error hidden"></div>
+
+    <div id="emptyState" class="empty-state">
+      <p>No report data found in this browser tab.</p>
+      <p>Run the load-test demo on the main page first — this page displays whatever that demo just generated.</p>
+      <p style="margin-top:18px;"><a href="index.html" class="btn">Go run the demo →</a></p>
+    </div>
+
+    <div id="frameWrap" class="frame-wrap hidden">
+      <iframe id="reportFrame" title="AIRI load-test report"></iframe>
+    </div>
+  </div>
+
+<script>
+  // Same split-hosting note as index.html: the API lives on Render, this
+  // page on GitHub Pages. Update this if you redeploy the API elsewhere.
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+  const REPORT_STORAGE_KEY = "airi_demo_report_payload";
+
+  const emptyState = document.getElementById("emptyState");
+  const errorBox = document.getElementById("errorBox");
+  const frameWrap = document.getElementById("frameWrap");
+  const reportFrame = document.getElementById("reportFrame");
+  const downloadPdfBtn = document.getElementById("downloadPdfBtn");
+
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.classList.remove("hidden");
+  }
+
+  async function loadReport() {
+    const raw = sessionStorage.getItem(REPORT_STORAGE_KEY);
+    if (!raw) return; // emptyState stays visible
+
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (e) {
+      showError("Saved report data was corrupted — go back and re-run the demo.");
+      return;
+    }
+
+    emptyState.classList.add("hidden");
+    if (payload.run_name) {
+      document.getElementById("pageTitle").textContent = `AIRI — ${payload.run_name}`;
+    }
+
+    // The PDF download works off the same payload regardless of whether
+    // the HTML preview below loads successfully.
+    downloadPdfBtn.classList.remove("hidden");
+    downloadPdfBtn.addEventListener("click", async () => {
+      downloadPdfBtn.disabled = true;
+      downloadPdfBtn.textContent = "Preparing PDF…";
+      try {
+        const res = await fetch(`${API_BASE}/report/pdf`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          let detail = "Could not generate the PDF.";
+          try { detail = (await res.json()).detail || detail; } catch (e) {}
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = (payload.run_name || "airi-report").replace(/[^a-z0-9-_ ]/gi, "_") + ".pdf";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        downloadPdfBtn.disabled = false;
+        downloadPdfBtn.textContent = "Download PDF";
+      }
+    });
+
+    try {
+      const res = await fetch(`${API_BASE}/report/html`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const html = await res.text();
+      if (!res.ok) {
+        let detail = html;
+        try { detail = JSON.parse(html).detail; } catch (e) {}
+        throw new Error(typeof detail === "string" ? detail : "Could not generate the report.");
+      }
+      reportFrame.srcdoc = html;
+      reportFrame.addEventListener("load", () => {
+        try {
+          const doc = reportFrame.contentDocument;
+          if (doc && doc.documentElement) {
+            reportFrame.style.height = doc.documentElement.scrollHeight + "px";
+          }
+        } catch (e) {
+          // Cross-origin or timing edge case — the iframe still renders,
+          // it just keeps its min-height instead of auto-sizing.
+        }
+      });
+      frameWrap.classList.remove("hidden");
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  loadReport();
+</script>
+</body>
+</html>

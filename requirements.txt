@@ -2,3 +2,4 @@ fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.6
 tiktoken>=0.7
+xhtml2pdf>=0.2.16
