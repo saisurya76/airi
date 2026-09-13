@@ -24,6 +24,10 @@ sensible default:
 | `WARNING` | ≥80% of the context window | send it, but log/alert — you're close to a hard failure |
 | `EXCEEDED` | over 100% — the provider **will** reject this | don't send it. Trim the request (drop old conversation history, shorten the prompt, chunk the document) and re-check |
 
+See [docs/API.md](API.md#how-status-is-decided-worked-examples) for
+the exact formula, the boundary rules at 80%/100%, and a real
+request/response captured for each status.
+
 Also worth checking `confidence`: it's `"high"` only when an exact
 tokenizer was used (currently OpenAI models via `tiktoken`). For every
 other model you get a `chars/4` heuristic estimate — still useful for

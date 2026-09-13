@@ -112,6 +112,133 @@ Request size is capped at 200,000 characters combined across
 
 ---
 
+## How `status` is decided (worked examples)
+
+`status` comes from one number, `context_utilization`:
+
+```
+context_utilization = estimated_total_tokens / context_window
+```
+
+(`estimated_total_tokens` is `input_tokens + estimated_output_tokens` —
+the request as sent, plus your own estimate of the response.)
+
+| status | condition | meaning |
+|---|---|---|
+| `SAFE` | `context_utilization < 0.80` | comfortable headroom |
+| `WARNING` | `0.80 ≤ context_utilization ≤ 1.00` | fits, but close — the next turn in a conversation, or a slightly longer response than expected, could tip it over |
+| `EXCEEDED` | `estimated_total_tokens > context_window` (i.e. `context_utilization > 1.00`) | the provider **will** reject this; AIRI isn't guessing here, it's arithmetic |
+
+Two things worth knowing precisely: the 80% cutoff is `>=`, so exactly
+80.00% is already `WARNING`, not `SAFE`. And exactly 100% (the request
+fits with zero tokens to spare) is still `WARNING`, not `EXCEEDED` —
+`EXCEEDED` requires actually going *over* the window. Both thresholds
+live in `airi/registry.py` (`WARNING_THRESHOLD`) and the comparison
+itself in `airi/analyzer.py`, if you want to tune them for your own
+risk tolerance.
+
+The three worked examples below were captured against the live API
+(`https://airi-mvp-api.onrender.com`) with real requests, so the numbers
+are reproducible, not illustrative — the `gpt-4`/`gpt-4o` ones used the
+exact tiktoken tokenizer (`confidence: "high"`). Inside `/project`,
+the identical logic runs once per archetype and shows up as that
+archetype's `unit.status`.
+
+### Example: SAFE
+
+A short prompt on a large-context model — plenty of headroom.
+
+Request:
+```json
+{ "prompt": "Explain quantum computing simply.", "model": "gpt-4o", "expected_output_tokens": 500 }
+```
+
+Response:
+```json
+{
+  "model": "gpt-4o",
+  "input_tokens": 5,
+  "estimated_output_tokens": 500,
+  "estimated_total_tokens": 505,
+  "context_window": 128000,
+  "context_utilization": 0.0039,
+  "estimated_cost": 0.005013,
+  "method": "tokenizer",
+  "confidence": "high",
+  "status": "SAFE"
+}
+```
+
+**Usage**: send it. Nothing more to do.
+
+### Example: WARNING
+
+A long input (~6,000 words) against `gpt-4`'s comparatively small
+8,192-token window — no output expected, and it's already at 89%.
+
+Request:
+```json
+{ "prompt": "<a ~6,000-word document>", "model": "gpt-4", "expected_output_tokens": 0 }
+```
+
+Response:
+```json
+{
+  "model": "gpt-4",
+  "input_tokens": 7285,
+  "estimated_output_tokens": 0,
+  "estimated_total_tokens": 7285,
+  "context_window": 8192,
+  "context_utilization": 0.8893,
+  "estimated_cost": 0.21855,
+  "method": "tokenizer",
+  "confidence": "high",
+  "status": "WARNING"
+}
+```
+
+**Usage**: still safe to send as-is (there's no output budget here to
+push it over), but if this were a multi-turn conversation, the *next*
+message added to this same history would likely tip it into `EXCEEDED`.
+Log it, and consider trimming history now rather than after the next
+call fails.
+
+### Example: EXCEEDED
+
+The same kind of long input (~7,500 words), this time also budgeting
+500 output tokens — together they overshoot `gpt-4`'s window by 17%.
+
+Request:
+```json
+{ "prompt": "<a ~7,500-word document>", "model": "gpt-4", "expected_output_tokens": 500 }
+```
+
+Response:
+```json
+{
+  "model": "gpt-4",
+  "input_tokens": 9106,
+  "estimated_output_tokens": 500,
+  "estimated_total_tokens": 9606,
+  "context_window": 8192,
+  "context_utilization": 1.1726,
+  "estimated_cost": 0.30318,
+  "method": "tokenizer",
+  "confidence": "high",
+  "status": "EXCEEDED"
+}
+```
+
+**Usage**: don't send this — the provider will reject it outright
+(most return a 400-class error and you still get billed nothing, but
+you've burned a round trip and, in a user-facing flow, their patience).
+Trim the input (see the `fit_to_context` example in
+[docs/INTEGRATION.md](INTEGRATION.md#option-a-python--import-the-library-directly)),
+shorten `expected_output_tokens`, or move to a larger-context model —
+then re-check before sending.
+
+---
+
 ## `POST /project`
 
 Project total tokens/cost across several distinct AI call-sites at
