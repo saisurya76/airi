@@ -49,13 +49,38 @@ def analyze(
         raise ValueError("Provide only one of `prompt` or `messages`, not both.")
 
     spec = get_model_spec(model)
-    known = is_known_model(model)
 
     if messages:
         input_tokens, method, confidence = count_messages(messages, model, spec.tokenizer_family)
     else:
         input_tokens, method, confidence = count_tokens(prompt, model, spec.tokenizer_family)
 
+    return build_result_from_counts(model, input_tokens, method, confidence, expected_output_tokens)
+
+
+def build_result_from_counts(
+    model: str,
+    input_tokens: int,
+    method: str,
+    confidence: str,
+    expected_output_tokens: int = 0,
+) -> AnalysisResult:
+    """
+    Given an input-token count someone else already computed — the local
+    tiktoken/heuristic path above, or a real provider API call — fills in
+    the rest of the estimate: context usage, SAFE/WARNING/EXCEEDED status,
+    and cost. `analyze()` is a thin wrapper around this that also does the
+    counting itself.
+
+    This is what lets the API layer's opt-in "Exact" flavor (see
+    api.py's /analyze/exact, and airi/exact_provider.py) reuse the exact
+    same status/cost math as the default flavor after getting input_tokens
+    from a real provider API instead of the local heuristic — one place
+    decides what SAFE/WARNING/EXCEEDED means, however the count was
+    obtained.
+    """
+    spec = get_model_spec(model)
+    known = is_known_model(model)
     if not known:
         confidence = "low"
 

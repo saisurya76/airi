@@ -20,35 +20,43 @@ class ModelSpec:
     context_window: int
     input_price_per_1m: float
     output_price_per_1m: float
-    # "openai" -> counted exactly via tiktoken. Anything else -> heuristic.
+    # "openai" -> counted exactly via tiktoken, locally, no network call.
+    # Anything else -> heuristic (chars/4) in the core/default flavor.
     tokenizer_family: str = "heuristic"
+    # Which provider's API this model belongs to — "openai" | "anthropic" |
+    # "google". Separate from tokenizer_family: tokenizer_family says how
+    # the *default* flavor counts (tiktoken vs heuristic); provider says
+    # which real API the opt-in "Exact" flavor calls for a non-OpenAI
+    # model (see airi/exact_provider.py, API-layer only). OpenAI models
+    # don't need a provider call for exact mode — tiktoken already is exact.
+    provider: str = "unknown"
 
 
 MODEL_REGISTRY = {
-    # --- OpenAI (exact tokenizer via tiktoken) ---
-    "gpt-4o": ModelSpec(128_000, 2.50, 10.00, "openai"),
-    "gpt-4o-mini": ModelSpec(128_000, 0.15, 0.60, "openai"),
-    "gpt-4-turbo": ModelSpec(128_000, 10.00, 30.00, "openai"),
-    "gpt-4": ModelSpec(8_192, 30.00, 60.00, "openai"),
-    "gpt-3.5-turbo": ModelSpec(16_385, 0.50, 1.50, "openai"),
-    "o1": ModelSpec(200_000, 15.00, 60.00, "openai"),
-    "o1-mini": ModelSpec(128_000, 1.10, 4.40, "openai"),
+    # --- OpenAI (exact tokenizer via tiktoken — no provider call needed for Exact mode) ---
+    "gpt-4o": ModelSpec(128_000, 2.50, 10.00, "openai", "openai"),
+    "gpt-4o-mini": ModelSpec(128_000, 0.15, 0.60, "openai", "openai"),
+    "gpt-4-turbo": ModelSpec(128_000, 10.00, 30.00, "openai", "openai"),
+    "gpt-4": ModelSpec(8_192, 30.00, 60.00, "openai", "openai"),
+    "gpt-3.5-turbo": ModelSpec(16_385, 0.50, 1.50, "openai", "openai"),
+    "o1": ModelSpec(200_000, 15.00, 60.00, "openai", "openai"),
+    "o1-mini": ModelSpec(128_000, 1.10, 4.40, "openai", "openai"),
 
-    # --- Anthropic (heuristic — no public exact tokenizer library) ---
-    "claude-3-5-sonnet": ModelSpec(200_000, 3.00, 15.00, "heuristic"),
-    "claude-3-5-haiku": ModelSpec(200_000, 0.80, 4.00, "heuristic"),
-    "claude-3-opus": ModelSpec(200_000, 15.00, 75.00, "heuristic"),
-    "claude-3-haiku": ModelSpec(200_000, 0.25, 1.25, "heuristic"),
+    # --- Anthropic (heuristic by default; Exact mode calls /v1/messages/count_tokens) ---
+    "claude-3-5-sonnet": ModelSpec(200_000, 3.00, 15.00, "heuristic", "anthropic"),
+    "claude-3-5-haiku": ModelSpec(200_000, 0.80, 4.00, "heuristic", "anthropic"),
+    "claude-3-opus": ModelSpec(200_000, 15.00, 75.00, "heuristic", "anthropic"),
+    "claude-3-haiku": ModelSpec(200_000, 0.25, 1.25, "heuristic", "anthropic"),
 
-    # --- Google (heuristic) ---
-    "gemini-1.5-pro": ModelSpec(2_000_000, 1.25, 5.00, "heuristic"),
-    "gemini-1.5-flash": ModelSpec(1_000_000, 0.075, 0.30, "heuristic"),
-    "gemini-2.0-flash": ModelSpec(1_000_000, 0.10, 0.40, "heuristic"),
+    # --- Google (heuristic by default; Exact mode calls Gemini's countTokens) ---
+    "gemini-1.5-pro": ModelSpec(2_000_000, 1.25, 5.00, "heuristic", "google"),
+    "gemini-1.5-flash": ModelSpec(1_000_000, 0.075, 0.30, "heuristic", "google"),
+    "gemini-2.0-flash": ModelSpec(1_000_000, 0.10, 0.40, "heuristic", "google"),
 }
 
 # Fallback used when the requested model isn't in the registry, so the
 # tool still returns a (clearly low-confidence) estimate instead of an error.
-DEFAULT_SPEC = ModelSpec(8_192, 0.0, 0.0, "heuristic")
+DEFAULT_SPEC = ModelSpec(8_192, 0.0, 0.0, "heuristic", "unknown")
 
 # Context utilization thresholds
 WARNING_THRESHOLD = 0.8  # >= 80% of context window

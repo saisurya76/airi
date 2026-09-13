@@ -85,6 +85,54 @@
   .meta { color: var(--muted); font-size: 12px; margin-top: 14px; }
   .hidden { display: none; }
 
+  .flavor-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .flavor-toggle { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
+  .flavor-pill {
+    margin: 0;
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .flavor-pill.active { background: var(--accent); color: #0f1115; }
+  .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .link-btn {
+    margin: 0;
+    background: transparent;
+    color: var(--accent);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .link-btn:hover { text-decoration: underline; }
+  .otp-input {
+    letter-spacing: 0.3em;
+    font-size: 18px;
+    text-align: center;
+  }
+  .exact-note {
+    color: var(--warning);
+    font-size: 12px;
+    margin-top: 10px;
+    background: rgba(242,184,75,0.1);
+    border: 1px solid rgba(242,184,75,0.3);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
   h2 { font-size: 17px; margin: 40px 0 4px; }
 
   .archetype-card {
@@ -142,6 +190,41 @@
 </head>
 <body>
   <div class="wrap">
+    <div class="flavor-bar">
+      <div class="flavor-toggle">
+        <button type="button" id="flavorStandardBtn" class="flavor-pill active">Standard</button>
+        <button type="button" id="flavorExactBtn" class="flavor-pill">Exact ▸</button>
+      </div>
+      <div id="authStatus" class="auth-status hidden">
+        <span id="authEmailLabel"></span>
+        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+      </div>
+    </div>
+
+    <div id="authPanel" class="panel hidden">
+      <p class="sub" style="margin:0 0 14px;">
+        <b style="color:var(--text);">Exact</b> calls Claude's and Gemini's own token-counting APIs
+        directly instead of estimating (OpenAI models are already exact either way). It's free to
+        use — signing in just keeps that shared capacity from being hammered by anonymous traffic.
+        One-time email code, no password, applies to the single-request check above only.
+      </p>
+      <div id="authStep1">
+        <label for="authEmailInput">Email</label>
+        <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+        <button type="button" id="sendCodeBtn">Send code</button>
+        <div id="authError1" class="error hidden"></div>
+      </div>
+      <div id="authStep2" class="hidden">
+        <label for="authCodeInput">6-digit code (check your email)</label>
+        <input id="authCodeInput" class="otp-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+        <div class="row">
+          <div><button type="button" id="verifyCodeBtn" style="width:100%;">Verify</button></div>
+          <div><button type="button" id="resendCodeBtn" class="secondary-btn" style="width:100%;">Resend code</button></div>
+        </div>
+        <div id="authError2" class="error hidden"></div>
+      </div>
+    </div>
+
     <h1>AIRI — AI Request Intelligence</h1>
     <p class="sub">Estimate tokens, context usage and cost for a request before you send it to a model.</p>
 
@@ -199,6 +282,7 @@
         <div class="bar-track"><div class="bar-fill" id="contextBar"></div></div>
         <div class="meta" id="contextMeta"></div>
       </div>
+      <div id="exactNote" class="exact-note hidden"></div>
     </div>
 
     <h2>Traffic projection</h2>
@@ -361,13 +445,24 @@
     analyzeBtn.disabled = true;
     analyzeBtn.textContent = "Analyzing…";
 
+    const useExact = currentFlavor === "exact" && !!authToken;
+    const endpoint = useExact ? "/analyze/exact" : "/analyze";
+    const headers = { "Content-Type": "application/json" };
+    if (useExact) headers["Authorization"] = `Bearer ${authToken}`;
+
     try {
-      const res = await fetch(`${API_BASE}/analyze`, {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ prompt, model, expected_output_tokens }),
       });
       const data = await res.json();
+      if (res.status === 401 && useExact) {
+        // Session expired mid-use — drop back to Standard rather than
+        // silently retrying under a different flavor than the user picked.
+        signOut();
+        throw new Error("Your Exact-mode session expired — signed you out. Sign in again if you'd like to retry with Exact.");
+      }
       if (!res.ok) throw new Error(data.detail || "Request failed.");
       renderResult(data);
     } catch (e) {
@@ -401,8 +496,160 @@
     document.getElementById("contextMeta").textContent =
       `${r.estimated_total_tokens.toLocaleString()} / ${r.context_window.toLocaleString()} tokens`;
 
+    const exactNote = document.getElementById("exactNote");
+    if (r.exact_mode_note) {
+      exactNote.textContent = r.exact_mode_note;
+      exactNote.classList.remove("hidden");
+    } else {
+      exactNote.classList.add("hidden");
+    }
+
     resultPanel.classList.remove("hidden");
   }
+
+  // ---------- Exact flavor: email + OTP sign-in ----------
+
+  const AUTH_TOKEN_KEY = "airi_auth_token";
+  const AUTH_EMAIL_KEY = "airi_auth_email";
+
+  let currentFlavor = "standard";
+  let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
+  let authEmail = localStorage.getItem(AUTH_EMAIL_KEY) || null;
+
+  const flavorStandardBtn = document.getElementById("flavorStandardBtn");
+  const flavorExactBtn = document.getElementById("flavorExactBtn");
+  const authStatus = document.getElementById("authStatus");
+  const authPanel = document.getElementById("authPanel");
+  const authStep1 = document.getElementById("authStep1");
+  const authStep2 = document.getElementById("authStep2");
+  const authError1 = document.getElementById("authError1");
+  const authError2 = document.getElementById("authError2");
+  const sendCodeBtn = document.getElementById("sendCodeBtn");
+  const verifyCodeBtn = document.getElementById("verifyCodeBtn");
+  const resendCodeBtn = document.getElementById("resendCodeBtn");
+
+  function setFlavor(flavor) {
+    currentFlavor = flavor;
+    flavorStandardBtn.classList.toggle("active", flavor === "standard");
+    flavorExactBtn.classList.toggle("active", flavor === "exact");
+    if (flavor === "exact" && !authToken) {
+      authPanel.classList.remove("hidden");
+    } else {
+      authPanel.classList.add("hidden");
+    }
+  }
+
+  function renderAuthStatus() {
+    if (authToken && authEmail) {
+      document.getElementById("authEmailLabel").textContent = `Signed in as ${authEmail}`;
+      authStatus.classList.remove("hidden");
+    } else {
+      authStatus.classList.add("hidden");
+    }
+  }
+
+  function signOut() {
+    authToken = null;
+    authEmail = null;
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_EMAIL_KEY);
+    renderAuthStatus();
+    setFlavor("standard");
+  }
+
+  async function checkExistingSession() {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!res.ok) throw new Error("expired");
+      const data = await res.json();
+      authEmail = data.email;
+      localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      renderAuthStatus();
+      setFlavor("exact");
+    } catch (e) {
+      // Stored token is stale/invalid — quietly fall back to Standard
+      // rather than surfacing an error for something the user didn't do.
+      signOut();
+    }
+  }
+
+  flavorStandardBtn.addEventListener("click", () => setFlavor("standard"));
+  flavorExactBtn.addEventListener("click", () => setFlavor("exact"));
+  document.getElementById("signOutBtn").addEventListener("click", signOut);
+
+  async function requestCode() {
+    authError1.classList.add("hidden");
+    const email = document.getElementById("authEmailInput").value.trim();
+    if (!email) {
+      authError1.textContent = "Enter your email first.";
+      authError1.classList.remove("hidden");
+      return;
+    }
+    sendCodeBtn.disabled = true;
+    sendCodeBtn.textContent = "Sending…";
+    try {
+      const res = await fetch(`${API_BASE}/auth/request-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not send a code.");
+      authStep1.classList.add("hidden");
+      authStep2.classList.remove("hidden");
+      document.getElementById("authCodeInput").focus();
+    } catch (e) {
+      authError1.textContent = e.message;
+      authError1.classList.remove("hidden");
+    } finally {
+      sendCodeBtn.disabled = false;
+      sendCodeBtn.textContent = "Send code";
+    }
+  }
+
+  async function verifyCode() {
+    authError2.classList.add("hidden");
+    const email = document.getElementById("authEmailInput").value.trim();
+    const code = document.getElementById("authCodeInput").value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      authError2.textContent = "Enter the 6-digit code from your email.";
+      authError2.classList.remove("hidden");
+      return;
+    }
+    verifyCodeBtn.disabled = true;
+    verifyCodeBtn.textContent = "Verifying…";
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Verification failed.");
+      authToken = data.token;
+      authEmail = data.email;
+      localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+      localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      renderAuthStatus();
+      setFlavor("exact");
+      // Reset the panel for next time (e.g. after a future sign-out).
+      authStep1.classList.remove("hidden");
+      authStep2.classList.add("hidden");
+      document.getElementById("authEmailInput").value = "";
+      document.getElementById("authCodeInput").value = "";
+    } catch (e) {
+      authError2.textContent = e.message;
+      authError2.classList.remove("hidden");
+    } finally {
+      verifyCodeBtn.disabled = false;
+      verifyCodeBtn.textContent = "Verify";
+    }
+  }
+
+  sendCodeBtn.addEventListener("click", requestCode);
+  resendCodeBtn.addEventListener("click", requestCode);
+  verifyCodeBtn.addEventListener("click", verifyCode);
 
   // ---------- Traffic projection ----------
 
@@ -733,6 +980,10 @@
   }
 
   runLoadTestBtn.addEventListener("click", runLoadTest);
+
+  // Restore a stored Exact-mode session, if any, independently of model
+  // loading below — this only touches auth state, not the dropdowns.
+  checkExistingSession();
 
   // Load the real model list first, then seed the example rows — avoids a
   // flash where their dropdowns briefly only offer the "gpt-4o" fallback

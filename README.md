@@ -16,8 +16,12 @@ build intentionally skips.
   own AI request pipeline as a pre-flight SEND/MODIFY/REJECT check,
   from Python or any other language over HTTP.
 - **[docs/API.md](docs/API.md)** — full reference for every endpoint
-  (`/analyze`, `/project`, `/report`, `/models`, `/health`): request/response
-  schemas and error formats.
+  (`/analyze`, `/project`, `/report`, `/models`, `/health`, `/auth/*`,
+  `/analyze/exact`): request/response schemas and error formats.
+- **[docs/EXACT_MODE.md](docs/EXACT_MODE.md)** — the opt-in "Exact"
+  flavor (real Claude/Gemini token counts via email+OTP sign-in): why
+  it's gated, why it's zero-cost even at peak traffic, and one-time
+  setup (Neon, Resend, Anthropic/Google keys).
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
 
@@ -64,7 +68,10 @@ print(result.to_dict())
 ```
 
 Run the sanity tests any time with `python3 tests/test_analyzer.py`,
-`python3 tests/test_projector.py`, and `python3 tests/test_report.py`.
+`python3 tests/test_projector.py`, `python3 tests/test_report.py`,
+`python3 tests/test_auth.py`, and `python3 tests/test_exact_provider.py`
+(the last two need no database/network — they test pure logic and
+mocked HTTP calls respectively).
 
 ## Project layout
 
@@ -76,13 +83,18 @@ airi/                   core library — zero web/db/cloud dependencies
   report_render.py            render_report_html() — one HTML template, also fed to xhtml2pdf
   tokenizer.py              exact counts (tiktoken) with heuristic fallback
   pricing.py                 cost = tokens x registry price
-  registry.py                  model -> context window, price, tokenizer family
+  registry.py                  model -> context window, price, tokenizer family, provider
   models.py                     AnalysisResult
-api.py                  FastAPI: POST /analyze, POST /project, POST /report(+/html,+/pdf), GET /models, GET /health
-frontend/index.html    try-it-out page (analyze + traffic projection + load-test demo)
+  auth.py                 API-layer only: OTP code hashing + JWT sessions (pure, no I/O)
+  db.py                   API-layer only: Neon/Postgres access for users + otp_codes
+  email_provider.py       API-layer only: sends the OTP email via Resend
+  exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /models, /health
+frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
-tests/                  sanity checks for analyzer.py, projector.py, and report.py
-docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration guide)
+sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
+tests/                  sanity checks for every module above
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup)
 ```
 
 The core library never imports FastAPI, and never makes a network call
@@ -233,6 +245,20 @@ falls back to the heuristic rather than raising. You'll get exact
 counts on a normal machine with outbound internet; you'll get the
 heuristic (still usable, just `medium`/not `high` confidence) in air-gapped
 or locked-down environments.
+
+## "Exact" flavor: real Claude/Gemini token counts, opt-in
+
+Everything above is the default flavor: exact for OpenAI (tiktoken),
+heuristic for everyone else, zero network dependency. The try-it page
+also offers an opt-in **Exact** toggle that calls Claude's and Gemini's
+own token-counting APIs directly instead of estimating — gated behind a
+one-time email code, not because the provider calls cost anything (they
+don't), but to keep AIRI's own shared API keys from being hammered by
+anonymous traffic. Fully optional, fully separate from the core library,
+and designed to run at zero cost even at peak traffic — every piece
+(Neon, Resend, the provider APIs themselves) fails safe into a pause or
+a heuristic fallback rather than ever generating a bill. See
+[docs/EXACT_MODE.md](docs/EXACT_MODE.md) for the full design and setup.
 
 ## Pricing & context data
 

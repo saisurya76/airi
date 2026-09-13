@@ -427,6 +427,66 @@ template (`airi/report_render.py`), so they always agree.
   `records` not a list of objects).
 - `500` (`/report/pdf` only) — PDF rendering failed unexpectedly.
 
+## "Exact" flavor: auth + `/analyze/exact`
+
+See [docs/EXACT_MODE.md](EXACT_MODE.md) for the concept, the zero-cost
+design, and one-time setup (Neon/Resend/Anthropic/Google). This section
+is just the request/response reference for the four endpoints involved.
+All four return a `503` with a plain-language `detail` if their required
+env vars aren't set on this deployment — none of this affects `/analyze`,
+`/project`, or `/report*`, which have no auth and never did.
+
+### `POST /auth/request-code`
+
+**Request**: `{"email": "you@example.com"}`
+
+**Response 200**: `{"message": "Check your email for a 6-digit code. It expires in 10 minutes."}`
+— always this generic message, whether or not the email has signed in before.
+
+**Errors**: `400` invalid email; `429` cooldown (max 1 per 60s) or daily
+cap (max 5/24h) hit for this email; `502` the email couldn't be sent;
+`503` not configured on this deployment.
+
+### `POST /auth/verify-code`
+
+**Request**: `{"email": "you@example.com", "code": "042817"}`
+
+**Response 200**: `{"token": "<jwt>", "email": "you@example.com"}` — send
+`token` back as `Authorization: Bearer <token>` on the two endpoints below.
+
+**Errors**: `400` no code requested / wrong code / too many attempts (5
+max) / code expired (10 min); `503` not configured.
+
+### `GET /auth/me`
+
+**Header**: `Authorization: Bearer <token>`
+
+**Response 200**: `{"email": "you@example.com"}` — lets a client check a
+stored token is still valid without repeating the OTP flow.
+
+**Errors**: `401` missing/invalid/expired token; `503` not configured.
+
+### `POST /analyze/exact`
+
+Same request body as [`POST /analyze`](#post-analyze) (`prompt` or
+`messages`, `model`, `expected_output_tokens`), same response shape —
+plus `Authorization: Bearer <token>` required, and one extra optional
+response field:
+
+| field | meaning |
+|---|---|
+| `exact_mode_note` | present only if the real provider call failed (rate limit, outage) — the response still has valid data, just from the heuristic fallback, and this field says so honestly instead of silently mislabeling it |
+
+For OpenAI models this endpoint returns exactly what `/analyze` would
+(tiktoken is already exact and free — no provider call needed). For
+Claude/Gemini models with the corresponding `ANTHROPIC_API_KEY`/
+`GOOGLE_API_KEY` configured, `method` is `"provider-api"` and
+`confidence` is `"high"`.
+
+**Errors**: `400`/`422` same as `/analyze`; `401` not signed in / session
+expired; `429` rate-limited (max 20 calls/minute per signed-in user);
+`503` Exact mode for that provider isn't configured on this deployment.
+
 ## Cold starts (demo host only)
 
 If you're hitting `https://airi-mvp-api.onrender.com`, Render's free
