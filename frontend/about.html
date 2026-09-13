@@ -56,13 +56,15 @@
   .panel p:last-child { margin-bottom: 0; }
   .panel ol, .panel ul { margin: 10px 0 0; padding-left: 20px; }
   .panel li { margin-bottom: 6px; }
-  code {
+  code, pre {
     background: #0f1115;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 1px 5px;
+    border-radius: 6px;
     font-size: 12.5px;
   }
+  code { padding: 1px 5px; }
+  pre { padding: 12px 14px; overflow-x: auto; margin: 10px 0 0; }
+  pre code { border: none; padding: 0; background: none; }
   a { color: var(--accent); }
   .status-chip {
     display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
@@ -94,7 +96,7 @@
     color: var(--muted);
     font-size: 12px;
   }
-  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
 </style>
 </head>
@@ -176,17 +178,47 @@
 
     <h2><span class="step-num">4</span>Consolidate a load test into a report</h2>
     <div class="panel">
-      <p>The <b>Load-test token usage report</b> section. The real flow: your team wires AIRI's
-      <code>/analyze</code> into your service calls, runs your normal load-testing tool of choice
-      against it (k6, JMeter, Locust, your own scripts — any language), tags each result with a
-      label, and submits everything collected to <code>/report</code> at the end of the run.</p>
+      <p>The <b>Load-test token usage report</b> section. To be clear about what "load test" means
+      here: it's <em>your own service</em> under load (from k6, JMeter, Locust, your own scripts —
+      any language, any tool), not AIRI itself. AIRI doesn't run the load or generate traffic; it
+      just estimates each request as your test fires it, and consolidates everything into one
+      report once the run is done.</p>
+      <p style="margin-top:10px;">Concretely, once <code>/analyze</code> is already wired into your
+      service calls (see step 5 below): as your load test runs, keep every <code>/analyze</code>
+      result your harness already gets back, tagged with a <code>label</code> (which call-site it
+      was) and, optionally, a <code>phase</code> (e.g. "normal" vs "peak") and a
+      <code>timestamp</code>. At the end of the run, POST the whole collected list once to
+      <code>/report</code>:</p>
+      <pre><code>import requests
+
+records = []  # filled in as your load test runs — see below
+
+def guarded_call(prompt, model, expected_output_tokens, label, phase="normal"):
+    """Every AI call your service makes during the load test goes through here."""
+    check = requests.post("http://localhost:8000/analyze", json={
+        "prompt": prompt, "model": model, "expected_output_tokens": expected_output_tokens,
+    }).json()
+    records.append({**check, "label": label, "phase": phase})
+    return check
+
+# ... your load-test tool drives guarded_call() for every request in the run ...
+
+# Once the run finishes, submit everything collected in one call:
+report = requests.post("http://localhost:8000/report", json={
+    "run_name": "Nightly load test", "records": records,
+}).json()
+print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {report['status_counts']}")</code></pre>
       <ol>
         <li>You get back totals, a SAFE/WARNING/EXCEEDED breakdown, per-label/per-model/per-phase
-        rollups, and the worst-offending requests — plus a downloadable, presentation-ready PDF.</li>
+        rollups, and the worst-offending requests — plus a downloadable, presentation-ready PDF
+        (<code>/report/pdf</code>, same body).</li>
         <li>Nothing is stored server-side: you submit the records from a run you already have,
-        AIRI just does the arithmetic and renders the report.</li>
+        AIRI just does the arithmetic and renders the report. Run it again tomorrow with a fresh
+        set of records and you get a fresh report — there's no history to manage or clean up.</li>
         <li>The section on the try-it page simulates this whole flow with made-up services so you
-        can see the report it produces without wiring anything up first.</li>
+        can see the report it produces without wiring anything up first. <code>docs/INTEGRATION.md</code>,
+        in the source download on the <a href="developers.html">Developers page</a>, has the full
+        walkthrough, including a non-Python example (k6/JMeter).</li>
       </ol>
     </div>
 
@@ -210,6 +242,7 @@
 
     <div class="site-footer">
       <a href="privacy.html">Privacy</a>
+      <a href="developers.html">For developers</a>
     </div>
   </div>
 </body>

@@ -89,7 +89,11 @@
   .hidden { display: none !important; }
   .otp-input { letter-spacing: 0.3em; font-size: 18px; text-align: center; }
 
-  .top-nav { display: flex; align-items: center; justify-content: flex-end; gap: 18px; margin-bottom: 14px; font-size: 12px; flex-wrap: wrap; }
+  .top-nav { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 14px; font-size: 12px; flex-wrap: wrap; }
+  .top-nav .brand-link { color: var(--text); text-decoration: none; font-weight: 800; font-size: 13px; letter-spacing: 0.3px; }
+  .top-nav .brand-link:hover { color: var(--accent); }
+  .top-nav .nav-links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .top-nav .nav-divider { width: 1px; height: 16px; background: var(--border); }
   .top-nav a { color: var(--muted); text-decoration: none; font-weight: 600; }
   .top-nav a:hover { color: var(--accent); text-decoration: underline; }
   .top-nav a.author-link {
@@ -100,7 +104,17 @@
     font-weight: 700;
   }
   .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: #0f1115; }
-  .top-nav a.active { color: var(--text); }
+  .top-nav a.workspaces-link {
+    background: rgba(110,168,254,0.12);
+    border: 1px solid rgba(110,168,254,0.5);
+    color: var(--accent);
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+  .top-nav a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
+  .top-nav a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  .top-nav a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
 
   .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 18px; }
 
@@ -229,10 +243,13 @@
 <body>
   <div class="wrap">
     <div class="top-nav">
-      <a href="about.html">What's AIRI?</a>
-      <a href="workspaces.html" class="active">Workspaces</a>
-      <a href="author.html" class="author-link">Author</a>
-      <a href="developers.html">Developers</a>
+      <a href="index.html" class="brand-link">AIRI</a>
+      <div class="nav-links">
+        <a href="about.html">What's AIRI?</a>
+        <a href="author.html" class="author-link">Author</a>
+        <span class="nav-divider"></span>
+        <a href="workspaces.html" class="workspaces-link active">Workspaces</a>
+      </div>
     </div>
 
     <!-- ---------- Sign-in gate ---------- -->
@@ -402,6 +419,7 @@
 
     <div class="site-footer">
       <a href="privacy.html">Privacy</a>
+      <a href="developers.html">For developers</a>
     </div>
   </div>
 
