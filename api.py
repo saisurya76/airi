@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, consolidated_report, db, notes, runtime_config, tool_runs, workspaces as ws
+from airi import author, comparison, consolidated_report, db, notes, runtime_config, tool_runs, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -903,6 +903,98 @@ def get_consolidated_report_pdf(project_id: int, authorization: Optional[str] = 
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}-consolidated-report.pdf"'},
+    )
+
+
+# --- Download a single saved tool run as its own PDF (Phase 4) ---
+#
+# The per-project consolidated report (above) already covers "every
+# tab's findings in one document" — this is the narrower "just this one
+# result" download the original spec also asked for, on each tool tab.
+
+
+@app.get("/projects/{project_id}/tools/{tool}/runs/{run_id}/pdf")
+def get_tool_run_pdf(project_id: int, tool: tool_runs.ToolName, run_id: int, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    proj, _workspace = _get_owned_project(project_id, user_id)
+    run = db.get_tool_run(run_id)
+    if run is None or run["project_id"] != project_id or run["tool"] != tool.value:
+        raise HTTPException(status_code=404, detail="Tool run not found.")
+
+    html = consolidated_report.render_single_run_html(proj, email, run)
+
+    from xhtml2pdf import pisa  # imported here: only this endpoint needs it (matches /report/pdf)
+
+    buffer = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buffer)
+    if result.err:
+        raise HTTPException(status_code=500, detail="Could not render this run's PDF.")
+
+    pdf_bytes = buffer.getvalue()
+    filename = "".join(c if c.isalnum() or c in "-_ " else "_" for c in f"{proj['title']}-{tool.value}").strip() or "airi-run"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
+    )
+
+
+# --- Cross-project comparison (Phase 4) ---
+#
+# Once a workspace has 2+ projects, this rolls each project's saved-run
+# history (same normalization as the consolidated report, one level up)
+# into a side-by-side comparison, ranked by estimated cost. Like the
+# consolidated report, one aggregation backs both the on-screen JSON and
+# the PDF — see airi/comparison.py.
+
+
+def _build_workspace_comparison(workspace_id: int, user_id: int, email: str) -> Dict[str, Any]:
+    workspace = _get_owned_workspace(workspace_id, user_id)
+    projects = db.list_projects(workspace_id)
+    summaries = []
+    for proj in projects:
+        runs_by_tool = {t.value: db.list_tool_runs(proj["id"], t.value) for t in tool_runs.ToolName}
+        summaries.append(comparison.project_summary(proj, runs_by_tool))
+    ranked = comparison.rank_by_cost(summaries)
+    workspace_totals = comparison.aggregate_workspace_totals(ranked)
+    return {
+        "workspace": workspace,
+        "prepared_by": email,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "workspace_totals": workspace_totals,
+        "projects": ranked,
+    }
+
+
+@app.get("/workspaces/{workspace_id}/comparison")
+def get_workspace_comparison(workspace_id: int, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    return _build_workspace_comparison(workspace_id, user_id, email)
+
+
+@app.get("/workspaces/{workspace_id}/comparison.pdf")
+def get_workspace_comparison_pdf(workspace_id: int, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    data = _build_workspace_comparison(workspace_id, user_id, email)
+
+    html = comparison.render_comparison_report_html(
+        data["workspace"], data["prepared_by"], data["generated_at"],
+        data["workspace_totals"], data["projects"],
+    )
+
+    from xhtml2pdf import pisa  # imported here: only this endpoint needs it (matches /report/pdf)
+
+    buffer = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buffer)
+    if result.err:
+        raise HTTPException(status_code=500, detail="Could not render the comparison report PDF.")
+
+    pdf_bytes = buffer.getvalue()
+    filename = "".join(c if c.isalnum() or c in "-_ " else "_" for c in data["workspace"]["title"]).strip() or "airi-workspace"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-comparison-report.pdf"'},
     )
 
 

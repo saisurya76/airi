@@ -349,6 +349,12 @@
           <div id="membersEmptyState" class="empty-state hidden">No team members yet.</div>
         </div>
 
+        <div class="panel hidden" id="comparisonPanel">
+          <h2>Project comparison</h2>
+          <p class="sub" style="margin:0 0 10px;">Appears once this workspace has 2+ projects — updates automatically as you work on them.</p>
+          <div id="comparisonContent"></div>
+        </div>
+
         <div class="panel">
           <h2>Projects</h2>
           <div id="projectsList"></div>
@@ -369,10 +375,11 @@
 
           <div class="tab-note">
             Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
-            report tools inside it — every run is saved to that project's history. Each project also
-            gets a Dashboard (charts across all saved runs), a Notes tab (a timestamped comment
-            history), and an Actions tab (a downloadable, signed consolidated report). A cross-project
-            comparison view is on the way in a later phase.
+            report tools inside it — every run is saved to that project's history, and every saved
+            run (and each project's consolidated findings) is downloadable as its own PDF. Each
+            project also gets a Dashboard (charts across all saved runs) and a Notes tab (a
+            timestamped comment history). Once this workspace has 2+ projects, a "Project comparison"
+            section appears above, comparing them side by side with its own downloadable report.
           </div>
         </div>
       </div>
@@ -957,6 +964,8 @@
         });
       });
     }
+
+    renderComparisonPanel();
   }
 
   document.getElementById("createProjectBtn").addEventListener("click", async () => {
@@ -1079,7 +1088,21 @@
         detailEl.classList.toggle("hidden");
         if (detailEl.dataset.rendered) return;
         detailEl.dataset.rendered = "1";
-        detailEl.innerHTML = renderToolResult(tool, run.result) + `<button type="button" class="danger-btn delete-run-btn" style="margin-top:10px;">Delete this run</button>`;
+        detailEl.innerHTML = renderToolResult(tool, run.result) + `
+          <div class="row" style="margin-top:10px;">
+            <div><button type="button" class="secondary-btn download-run-btn" style="width:100%;">Download PDF</button></div>
+            <div style="flex:0;"><button type="button" class="danger-btn delete-run-btn">Delete this run</button></div>
+          </div>
+          <div class="error hidden download-run-error" style="margin-top:6px;"></div>
+        `;
+        detailEl.querySelector(".download-run-btn").addEventListener("click", (evt) => {
+          downloadPdf(
+            `/projects/${project.id}/tools/${tool}/runs/${runId}/pdf`,
+            `${safeFilePart(project.title || "project")}-${tool}-${runId}.pdf`,
+            evt.currentTarget,
+            detailEl.querySelector(".download-run-error")
+          );
+        });
         detailEl.querySelector(".delete-run-btn").addEventListener("click", () => {
           openConfirmModal(
             "Delete this run?",
@@ -1088,6 +1111,7 @@
               await apiFetch(`/projects/${project.id}/tools/${tool}/runs/${runId}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
               await loadToolHistory(tool, project, idPrefix);
               maybeRefreshDashboard(rowEl, project);
+              maybeRefreshComparison();
             }
           );
         });
@@ -1338,15 +1362,20 @@
     `;
   }
 
-  async function downloadConsolidatedReport(project) {
-    const btn = document.getElementById(`proj-${project.id}-download-consolidated-btn`);
-    const errorEl = document.getElementById(`proj-${project.id}-download-error`);
+  // Shared by every "download a PDF" button in this app (consolidated
+  // report, comparison report, and a single saved run) — same
+  // authenticated-fetch-to-blob-to-download dance each time.
+  function safeFilePart(s) {
+    return (s || "").replace(/[^a-zA-Z0-9-_ ]/g, "_");
+  }
+
+  async function downloadPdf(path, filename, btn, errorEl) {
     errorEl.classList.add("hidden");
     btn.disabled = true;
     const originalText = btn.textContent;
     btn.textContent = "Preparing PDF…";
     try {
-      const res = await fetch(`${API_BASE}/projects/${project.id}/report/consolidated.pdf`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
       if (!res.ok) {
         let detail = "Could not generate the report.";
         try { detail = (await res.json()).detail || detail; } catch (e) { /* no JSON body */ }
@@ -1356,7 +1385,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${(project.title || "project").replace(/[^a-zA-Z0-9-_ ]/g, "_")}-consolidated-report.pdf`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1368,6 +1397,90 @@
       btn.disabled = false;
       btn.textContent = originalText;
     }
+  }
+
+  function downloadConsolidatedReport(project) {
+    const btn = document.getElementById(`proj-${project.id}-download-consolidated-btn`);
+    const errorEl = document.getElementById(`proj-${project.id}-download-error`);
+    return downloadPdf(
+      `/projects/${project.id}/report/consolidated.pdf`,
+      `${safeFilePart(project.title || "project")}-consolidated-report.pdf`,
+      btn, errorEl
+    );
+  }
+
+  // ---------- Phase 4: cross-project comparison ----------
+
+  const comparisonPanel = document.getElementById("comparisonPanel");
+  const comparisonContent = document.getElementById("comparisonContent");
+
+  async function renderComparisonPanel() {
+    const projects = (currentWorkspace && currentWorkspace.projects) || [];
+    if (projects.length < 2) {
+      comparisonPanel.classList.add("hidden");
+      return;
+    }
+    comparisonPanel.classList.remove("hidden");
+    comparisonContent.innerHTML = `<div class="empty-state">Loading comparison…</div>`;
+    try {
+      const data = await apiFetch(`/workspaces/${currentWorkspace.id}/comparison`);
+      comparisonContent.innerHTML = comparisonHtml(data);
+      document.getElementById("download-comparison-btn").addEventListener("click", () => downloadComparisonReport(currentWorkspace));
+    } catch (e) {
+      comparisonContent.innerHTML = `<div class="empty-state">Could not load comparison: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function maybeRefreshComparison() {
+    if (!comparisonPanel.classList.contains("hidden")) renderComparisonPanel();
+  }
+
+  function comparisonHtml(data) {
+    const { workspace_totals, projects } = data;
+    const donutItems = projects.map((p, i) => ({
+      label: p.project.title,
+      value: p.totals.total_cost,
+      color: ["#6ea8fe", "#9b7ef2", "#3ecf8e", "#f2b84b", "#f2555a"][i % 5],
+    }));
+    const rows = projects.map((p) => `
+      <tr>
+        <td>${escapeHtml(p.project.title)}</td>
+        <td>${p.totals.total_runs.toLocaleString()}</td>
+        <td>${p.totals.total_tokens.toLocaleString()}</td>
+        <td>$${p.totals.total_cost.toFixed(4)}</td>
+        <td>${statusBadgeHtml("SAFE")} ${p.totals.status_counts.SAFE} &nbsp;${statusBadgeHtml("WARNING")} ${p.totals.status_counts.WARNING} &nbsp;${statusBadgeHtml("EXCEEDED")} ${p.totals.status_counts.EXCEEDED}</td>
+      </tr>
+    `).join("");
+    return `
+      <div class="result-grid">
+        <div class="stat"><div class="label">Projects compared</div><div class="value">${workspace_totals.project_count.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total saved runs</div><div class="value">${workspace_totals.total_runs.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Combined estimated cost</div><div class="value">$${workspace_totals.total_cost.toFixed(4)}</div></div>
+        <div class="stat"><div class="label">Combined estimated tokens</div><div class="value">${workspace_totals.total_tokens.toLocaleString()}</div></div>
+      </div>
+      <div class="chart-row">
+        <div class="chart-card">
+          <div class="chart-title">Estimated cost by project</div>
+          ${donutChartSvg(donutItems)}
+        </div>
+      </div>
+      <table class="tool-table">
+        <thead><tr><th>Project</th><th>Saved runs</th><th>Tokens</th><th>Cost</th><th>Status mix</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="row" style="margin-top:16px;"><div><button type="button" id="download-comparison-btn" style="width:100%;">Download comparison report (PDF)</button></div></div>
+      <div class="error hidden" id="comparison-download-error"></div>
+    `;
+  }
+
+  function downloadComparisonReport(workspace) {
+    const btn = document.getElementById("download-comparison-btn");
+    const errorEl = document.getElementById("comparison-download-error");
+    return downloadPdf(
+      `/workspaces/${workspace.id}/comparison.pdf`,
+      `${safeFilePart(workspace.title || "workspace")}-comparison-report.pdf`,
+      btn, errorEl
+    );
   }
 
   function renderToolPanel(tool, project, panelEl) {
@@ -1414,6 +1527,7 @@
           document.getElementById(`${idPrefix}-label`).value = "";
           await loadToolHistory(tool, project, idPrefix);
           maybeRefreshDashboard(panelEl, project);
+          maybeRefreshComparison();
         } catch (e) {
           errorEl.textContent = e.message;
           errorEl.classList.remove("hidden");
@@ -1458,6 +1572,7 @@
           document.getElementById(`${idPrefix}-label`).value = "";
           await loadToolHistory(tool, project, idPrefix);
           maybeRefreshDashboard(panelEl, project);
+          maybeRefreshComparison();
         } catch (e) {
           errorEl.textContent = e.message;
           errorEl.classList.remove("hidden");
@@ -1521,6 +1636,7 @@
         document.getElementById(`${idPrefix}-label`).value = "";
         await loadToolHistory(tool, project, idPrefix);
         maybeRefreshDashboard(panelEl, project);
+        maybeRefreshComparison();
       } catch (e) {
         errorEl.textContent = e.message;
         errorEl.classList.remove("hidden");

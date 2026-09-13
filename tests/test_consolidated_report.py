@@ -6,6 +6,7 @@ from airi.consolidated_report import (
     aggregate_totals,
     latest_per_tool,
     render_consolidated_report_html,
+    render_single_run_html,
     run_stats,
 )
 
@@ -165,3 +166,32 @@ def test_render_consolidated_report_html_escapes_note_body():
 
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_render_single_run_html_analyze():
+    project = {"title": "Support Bot"}
+    run = {"tool": "analyze", "label": "baseline", "created_at": "2026-01-01T00:00:00Z", "result": ANALYZE_RESULT}
+    html = render_single_run_html(project, "surya@example.com", run)
+    assert "Support Bot" in html
+    assert "baseline" in html
+    assert "surya@example.com" in html
+    assert "Standard analyze" in html
+    assert "claude-3-5-sonnet" in html
+    assert "<html>" in html and "</html>" in html
+
+
+def test_render_single_run_html_project():
+    project = {"title": "Traffic Study"}
+    run = {"tool": "project", "label": "", "created_at": "2026-01-02T00:00:00Z", "result": PROJECT_RESULT}
+    html = render_single_run_html(project, "a@b.com", run)
+    assert "Traffic Study" in html
+    assert "(untitled run)" in html
+    assert "Traffic projection" in html
+
+
+def test_render_single_run_html_report():
+    project = {"title": "Load Test Project"}
+    run = {"tool": "report", "label": "weekly", "created_at": "2026-01-03T00:00:00Z", "result": REPORT_RESULT}
+    html = render_single_run_html(project, "a@b.com", run)
+    assert "Load Test Project" in html
+    assert "Load-test report" in html

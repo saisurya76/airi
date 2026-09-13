@@ -1,14 +1,16 @@
-# Workspaces & Projects (Phases 1–3)
+# Workspaces & Projects (Phases 1–4)
 
 `frontend/workspaces.html` lets a signed-in user organize their work
 into **workspaces** (a team/initiative) containing **projects** (a
 specific thing being analyzed), instead of using AIRI's tools as a
 one-off calculator every time. This is a **multi-phase plan**: Phase 1
 shipped the data model, CRUD, and full restore-on-login; Phase 2 made
-AIRI's tools runnable and saved inside a project; Phase 3 (this
-delivery) adds a Dashboard tab, a Notes tab, and an Actions tab with a
-downloadable consolidated PDF report. See "What's next" at the bottom
-for what's still deferred and why.
+AIRI's tools runnable and saved inside a project; Phase 3 added a
+Dashboard tab, a Notes tab, and an Actions tab with a downloadable
+consolidated PDF report; Phase 4 (this delivery) adds a cross-project
+comparison tab with its own PDF report, plus per-saved-run PDF
+downloads. See "What's next" at the bottom for what's still deferred
+and why.
 
 Like Exact mode, this entire feature requires a signed-in session
 (email + OTP — see [docs/EXACT_MODE.md](EXACT_MODE.md)). It doesn't
@@ -265,21 +267,93 @@ in a project, not a literal sum of independent charges.
 Notes cascade-delete with their project (`ON DELETE CASCADE`), same as
 saved tool runs.
 
+## Cross-project comparison & per-run PDFs (Phase 4)
+
+Two things land together in this delivery: a **Project comparison**
+section on the workspace page, and PDF downloads for individual saved
+runs (not just a project's consolidated report).
+
+- **Project comparison** — appears on the workspace page, above the
+  project list, **once that workspace has 2+ projects** (a single
+  project has nothing to compare against, so the section stays
+  hidden). It shows stat tiles (projects compared, total saved runs,
+  combined estimated cost/tokens), a donut chart of estimated cost by
+  project, and a table ranking every project **most-expensive-first**,
+  with saved-run count, tokens, cost, and a SAFE/WARNING/EXCEEDED
+  status mix per project. Like the Dashboard tab, it re-fetches
+  automatically any time a tool run is saved or deleted anywhere in
+  the workspace, so it never goes stale while you're working.
+- **Per-run PDF download** — every entry in a tool's run history
+  (Standard, Exact, Traffic projection, Load-test report alike) now has
+  its own **"Download PDF"** button next to "Delete this run", for
+  sharing or filing a single saved result without pulling the whole
+  project's consolidated report.
+
+### Comparison: the same one-aggregation-backs-two-views pattern
+
+`airi/comparison.py` is pure logic, and it deliberately reuses
+`airi/consolidated_report.py`'s per-run normalization
+(`run_stats`/`aggregate_totals`) rather than re-inventing it: each
+project's summary is just that project's saved runs (across all four
+tools) rolled up with the exact same logic Phase 3 already uses for a
+single project, then `rank_by_cost` sorts those summaries
+most-expensive-first, and `aggregate_workspace_totals` sums them into
+the workspace-wide stat tiles. The on-screen JSON
+(`GET /workspaces/{id}/comparison`) and the PDF
+(`GET /workspaces/{id}/comparison.pdf`) are both built from
+`api.py`'s `_build_workspace_comparison`, so — same reasoning as
+Phase 3's consolidated report — they can never silently disagree.
+
+**"Workspace-level reporting"**, from the original plan, is this
+comparison tab plus its downloadable PDF: a workspace's report *is*
+its projects compared side by side. The comparison PDF's "Prepared by"
+line uses the signed-in session's own email, for the same reason as
+the consolidated report (see above) — real team collaboration hasn't
+shipped, so the workspace owner is, by construction, the only person
+who can ever generate it.
+
+A single-project workspace still answers `GET
+.../comparison` successfully (a degenerate `project_count: 1`
+comparison) — the frontend is what decides to hide the section, not
+the API, so anything else calling this endpoint directly still gets a
+usable answer.
+
+### Per-run PDF: reusing the Phase 3 renderers for one run instead of a whole project
+
+`render_single_run_html` (added to `airi/consolidated_report.py`)
+builds a standalone one-page PDF for exactly one saved run, reusing
+the exact same per-tool result renderers
+(`_render_latest_analyze_or_exact`, `_render_latest_project`,
+`_render_latest_report`) that the consolidated report already uses to
+show a tool's "latest run" section — so a run looks identical whether
+it's shown inside the full consolidated report or downloaded on its
+own. `GET /projects/{id}/tools/{tool}/runs/{run_id}/pdf` 404s if the
+run doesn't belong to that project, or if `{tool}` in the URL doesn't
+match the run's actual tool (guards against a stale/mismatched link).
+
+### API reference (Phase 4)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /projects/{id}/tools/{tool}/runs/{run_id}/pdf` | One saved run, rendered to a downloadable PDF. 404s on a project/tool/run mismatch. |
+| `GET /workspaces/{id}/comparison` | Cross-project comparison as JSON: `workspace`, `prepared_by`, `generated_at`, `workspace_totals`, `projects` (each project's totals + by-tool breakdown, ranked most-expensive-first). |
+| `GET /workspaces/{id}/comparison.pdf` | The same data, rendered to a downloadable PDF. |
+
 ## What's next (later phases — not in this delivery)
 
 Per the plan agreed before building this: Phase 1 shipped the data
 model, CRUD, and restore-on-login; Phase 2 made AIRI's tools runnable
-and saved inside a project; Phase 3 (above) added the Dashboard, Notes,
-and Actions tabs. Still to come:
+and saved inside a project; Phase 3 added the Dashboard, Notes, and
+Actions tabs; Phase 4 (above) added the cross-project comparison tab,
+its PDF report, and per-run PDF downloads. Still to come:
 
-1. **Comparison tab** — appears once a workspace has 2+ projects,
-   auto-updating in the background as tool runs are saved.
-2. **Per-tab PDF downloads** and a **comparison-level PDF report** —
-   Phase 3 shipped the consolidated-per-project report; downloading a
-   single tab's result on its own, and a cross-project comparison
-   report, are deferred to land alongside the comparison tab.
-3. **Workspace-level reporting** and **real team collaboration**
-   (a member actually signing in and seeing the workspace, rather than
-   just being notified) are open design questions for a later phase —
-   the latter is also what the consolidated report's "prepared by"
-   simplification (see above) is waiting on.
+1. **Real team collaboration** — a member actually signing in and
+   seeing the workspace themselves (rather than just being notified by
+   email when added or removed) remains an open design question for a
+   later phase. This is also what the "prepared by" simplification
+   used throughout the consolidated and comparison reports (see above)
+   is waiting on: today it's always the workspace owner's own email,
+   because real team collaboration hasn't shipped and no one else can
+   reach a project or workspace yet.
+
+No other items from the original 4-phase plan remain outstanding.

@@ -519,7 +519,7 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
-## Workspaces & projects (Phases 1–3)
+## Workspaces & projects (Phases 1–4)
 
 See [docs/WORKSPACES.md](WORKSPACES.md) for the full concept, schema,
 and design rationale (the app-key delete-confirmation PIN, tech-stack
@@ -555,12 +555,17 @@ one that doesn't exist.
 | `DELETE /projects/{id}/notes/{note_id}` | Body `{"app_key": "1234"}`, same delete gate |
 | `GET /projects/{id}/report/consolidated` | Aggregated totals/by-tool/latest-run/notes across the whole project, as JSON — backs the Dashboard and Actions tabs |
 | `GET /projects/{id}/report/consolidated.pdf` | The same aggregation, rendered to a downloadable PDF, signed with the session's own email |
+| `GET /projects/{id}/tools/{tool}/runs/{run_id}/pdf` | One saved run, rendered to a downloadable PDF; `404` if the run doesn't belong to that project or `{tool}` doesn't match its actual tool |
+| `GET /workspaces/{id}/comparison` | Cross-project comparison as JSON: `workspace`, `prepared_by`, `generated_at`, `workspace_totals`, `projects` (ranked most-expensive-first) |
+| `GET /workspaces/{id}/comparison.pdf` | The same comparison, rendered to a downloadable PDF |
 
 See [docs/WORKSPACES.md](WORKSPACES.md#tool-runs-phase-2-airis-tools-inside-a-project)
-for what gets stored, and why a BYOK key never does, and
+for what gets stored, and why a BYOK key never does,
 [docs/WORKSPACES.md](WORKSPACES.md#dashboard-notes--actions-phase-3)
 for the Phase 3 tabs (Dashboard/Notes/Actions) and the consolidated
-report.
+report, and
+[docs/WORKSPACES.md](WORKSPACES.md#cross-project-comparison--per-run-pdfs-phase-4)
+for the Phase 4 comparison tab and per-run PDF downloads.
 
 ## `GET /download`
 
