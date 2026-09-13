@@ -14,13 +14,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from airi import analyze, list_supported_models
+from airi import Archetype, analyze, list_supported_models, project
+from airi.projector import MAX_ARCHETYPES
 from airi.registry import MODEL_REGISTRY
 
 app = FastAPI(
     title="AIRI — AI Request Intelligence",
     description="Estimate tokens, context usage and cost for an AI request before you send it.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # Wide open for the MVP: this is a stateless, read-only analysis endpoint
@@ -40,6 +41,18 @@ class ChatMessage(BaseModel):
     content: str
 
 
+def _check_input_shape(prompt: Optional[str], messages: Optional[List[ChatMessage]], label: str = "Request"):
+    """Shared validation for anything shaped like a single analyze() call —
+    used by both /analyze and each archetype inside /project."""
+    if not prompt and not messages:
+        raise ValueError(f"{label}: provide either `prompt` or `messages`.")
+    if prompt and messages:
+        raise ValueError(f"{label}: provide only one of `prompt` or `messages`, not both.")
+    text_len = len(prompt) if prompt else sum(len(m.content) for m in messages)
+    if text_len > MAX_PROMPT_CHARS:
+        raise ValueError(f"{label}: input exceeds the {MAX_PROMPT_CHARS}-character request limit.")
+
+
 class AnalyzeRequest(BaseModel):
     prompt: Optional[str] = None
     messages: Optional[List[ChatMessage]] = None
@@ -47,15 +60,27 @@ class AnalyzeRequest(BaseModel):
     expected_output_tokens: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def _check_input_shape(self):
-        if not self.prompt and not self.messages:
-            raise ValueError("Provide either `prompt` or `messages`.")
-        if self.prompt and self.messages:
-            raise ValueError("Provide only one of `prompt` or `messages`, not both.")
-        text_len = len(self.prompt) if self.prompt else sum(len(m.content) for m in self.messages)
-        if text_len > MAX_PROMPT_CHARS:
-            raise ValueError(f"Input exceeds the {MAX_PROMPT_CHARS}-character request limit.")
+    def _validate(self):
+        _check_input_shape(self.prompt, self.messages)
         return self
+
+
+class ArchetypeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    volume: int = Field(ge=0)
+    prompt: Optional[str] = None
+    messages: Optional[List[ChatMessage]] = None
+    model: str = Field(default="gpt-4o")
+    expected_output_tokens: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _validate(self):
+        _check_input_shape(self.prompt, self.messages, label=f"Archetype '{self.name}'")
+        return self
+
+
+class ProjectRequest(BaseModel):
+    archetypes: List[ArchetypeRequest] = Field(min_length=1, max_length=MAX_ARCHETYPES)
 
 
 @app.get("/health")
@@ -86,6 +111,34 @@ def analyze_request(body: AnalyzeRequest):
             model=body.model,
             expected_output_tokens=body.expected_output_tokens,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result.to_dict()
+
+
+@app.post("/project")
+def project_request(body: ProjectRequest):
+    """
+    Volume projection: given several distinct AI call-sites in your app,
+    each with a representative sample request, a target model, and a
+    volume you supply (from your own analytics or projections), returns
+    per-archetype and grand-total tokens/cost. See airi/projector.py —
+    AIRI doesn't guess volume, it only does the multiplication once you
+    provide it.
+    """
+    try:
+        archetypes = [
+            Archetype(
+                name=a.name,
+                volume=a.volume,
+                prompt=a.prompt,
+                messages=[m.model_dump() for m in a.messages] if a.messages else None,
+                model=a.model,
+                expected_output_tokens=a.expected_output_tokens,
+            )
+            for a in body.archetypes
+        ]
+        result = project(archetypes)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result.to_dict()

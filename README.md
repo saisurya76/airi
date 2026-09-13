@@ -52,20 +52,22 @@ result = analyze(prompt="Explain quantum computing simply.", model="gpt-4o", exp
 print(result.to_dict())
 ```
 
-Run the sanity tests any time with `python3 tests/test_analyzer.py`.
+Run the sanity tests any time with `python3 tests/test_analyzer.py` and
+`python3 tests/test_projector.py`.
 
 ## Project layout
 
 ```
 airi/                   core library — zero web/db/cloud dependencies
-  analyzer.py             analyze() — the one public function
-  tokenizer.py             exact counts (tiktoken) with heuristic fallback
-  pricing.py                cost = tokens x registry price
-  registry.py                 model -> context window, price, tokenizer family
-  models.py                    AnalysisResult
-api.py                  FastAPI: POST /analyze, GET /models, GET /health
+  analyzer.py             analyze() — per-request estimate
+  projector.py             project() — multi-archetype volume projection, built on analyze()
+  tokenizer.py              exact counts (tiktoken) with heuristic fallback
+  pricing.py                 cost = tokens x registry price
+  registry.py                  model -> context window, price, tokenizer family
+  models.py                     AnalysisResult
+api.py                  FastAPI: POST /analyze, POST /project, GET /models, GET /health
 frontend/index.html    try-it-out page (vanilla HTML/CSS/JS, no build step)
-tests/test_analyzer.py  sanity checks for the core library
+tests/                  sanity checks for analyzer.py and projector.py
 ```
 
 The core library never imports FastAPI, and never makes a network call
@@ -105,6 +107,45 @@ that's required for it to function — see "Tokenizer accuracy" below.
 `EXCEEDED` past 100%. `GET /models` lists everything in the registry for
 a dropdown; an unrecognized model still returns an estimate, just
 flagged `confidence: "low"` and `known_model: false` instead of erroring.
+
+## Volume projection: estimating cost across a whole app
+
+`analyze()` prices one request. A real app only sends some fraction of
+its traffic to a model, split across a handful of distinct call-sites
+(a chat reply, a doc summary, a search rerank...) — and AIRI has no way
+to know how many of each you'll actually get. That number is your own
+traffic data or product projections, not something a token-estimation
+library can see. `project()` doesn't try to guess it; it takes the
+volume as an input and does the multiplication for you.
+
+```python
+from airi import project, Archetype
+
+result = project([
+    Archetype(name="chat reply", volume=10000, prompt="Hi there, how can I help?",
+              model="gpt-4o-mini", expected_output_tokens=80),
+    Archetype(name="doc summary", volume=500, prompt="Summarize this document...",
+              model="claude-3-5-sonnet", expected_output_tokens=300),
+])
+print(result.to_dict())
+```
+
+Each archetype is one distinct AI call-site: a representative sample
+request (same `prompt`/`messages` + `model` + `expected_output_tokens`
+shape `analyze()` takes) plus the volume you expect for it, in whatever
+period you're planning for (daily, monthly — AIRI doesn't care, it's
+just a multiplier). The result gives per-archetype projected tokens and
+cost, a grand total, and a cost/token breakdown by model — useful the
+moment two archetypes use different providers. `POST /project` exposes
+the same thing over HTTP, and the try-it page has a "Traffic projection"
+section that builds the request for you.
+
+This is deliberately not the same thing as the frozen spec's P7
+"Predictive Intelligence" (P50/P90/P99 output-length prediction from
+*observed historical* usage) — that needs a database tracking real
+traffic over time. This is simpler and stays honest about its inputs:
+you supply the volume assumption, it does the arithmetic. No tracking,
+no history, still fully stateless.
 
 ## Tokenizer accuracy
 
@@ -158,3 +199,8 @@ one try-it page. Cut for that reason:
 Everything that *is* here — `analyze()`, exact/heuristic token counting,
 context-window classification, cost estimation, the result shape — matches
 the frozen spec's sections 1–5 exactly.
+
+`project()`/`/project` (volume projection, above) isn't in the frozen
+spec at all — it's a small, deliberately stateless extension added after
+the initial build to answer "what will this cost across my whole app,"
+not a scope change to the P0–P4 MVP itself.

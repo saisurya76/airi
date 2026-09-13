@@ -18,7 +18,15 @@ Usage:
 
 from .analyzer import analyze
 from .models import AnalysisResult
+from .projector import Archetype, ProjectionResult, project
 from .registry import list_supported_models
 
-__all__ = ["analyze", "AnalysisResult", "list_supported_models"]
-__version__ = "0.1.0"
+__all__ = [
+    "analyze",
+    "AnalysisResult",
+    "list_supported_models",
+    "project",
+    "Archetype",
+    "ProjectionResult",
+]
+__version__ = "0.2.0"

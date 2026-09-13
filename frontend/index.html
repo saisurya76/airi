@@ -84,6 +84,60 @@
   .bar-fill { height: 100%; border-radius: 4px; }
   .meta { color: var(--muted); font-size: 12px; margin-top: 14px; }
   .hidden { display: none; }
+
+  h2 { font-size: 17px; margin: 40px 0 4px; }
+
+  .archetype-card {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 14px;
+    position: relative;
+  }
+  .archetype-card .row { margin-top: 12px; }
+  .archetype-card .row.name-volume > div:first-child { flex: 2; }
+  .remove-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    margin: 0;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .remove-btn:hover { color: var(--exceeded); border-color: var(--exceeded); }
+  .secondary-btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+  }
+  table.projection-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  table.projection-table th, table.projection-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.projection-table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  table.projection-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 12px; }
+  .model-breakdown { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .model-chip {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .model-chip b { color: var(--text); }
 </style>
 </head>
 <body>
@@ -146,6 +200,51 @@
         <div class="meta" id="contextMeta"></div>
       </div>
     </div>
+
+    <h2>Traffic projection</h2>
+    <p class="sub">
+      A real app only sends some fraction of its traffic to an AI model, and that fraction is
+      usually a handful of distinct request shapes, not one. AIRI can't know how many of each
+      you'll get — that's your own usage data or projections — but once you tell it, it'll do
+      the multiplication. Add one row per distinct AI call-site in your app (a representative
+      sample request + how many you expect), and get a total.
+    </p>
+
+    <div class="panel">
+      <div id="archetypeList"></div>
+      <button id="addArchetypeBtn" class="secondary-btn">+ Add request type</button>
+      <button id="projectBtn">Run projection</button>
+      <div id="projectError" class="error hidden"></div>
+    </div>
+
+    <div id="projectionResult" class="panel hidden">
+      <div style="overflow-x:auto;">
+        <table class="projection-table">
+          <thead>
+            <tr>
+              <th>Request type</th>
+              <th>Model</th>
+              <th>Volume</th>
+              <th>Tokens / request</th>
+              <th>Projected tokens</th>
+              <th>Projected cost</th>
+            </tr>
+          </thead>
+          <tbody id="projectionRows"></tbody>
+          <tfoot>
+            <tr>
+              <td colspan="2">Total</td>
+              <td id="totalVolume">—</td>
+              <td></td>
+              <td id="totalTokens2">—</td>
+              <td id="totalCost2">—</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div id="exceededNote" class="error hidden" style="margin-top:12px;"></div>
+      <div class="model-breakdown" id="modelBreakdown"></div>
+    </div>
   </div>
 
 <script>
@@ -159,18 +258,32 @@
   const errorEl = document.getElementById("error");
   const resultPanel = document.getElementById("resultPanel");
 
+  let modelsData = [];
+
+  function modelOptionsHtml(selected) {
+    const list = modelsData.length ? modelsData : [{ id: "gpt-4o", context_window: 128000 }];
+    return list
+      .map((m) => {
+        const sel = m.id === selected ? " selected" : "";
+        return `<option value="${m.id}"${sel}>${m.id} (${m.context_window.toLocaleString()} ctx)</option>`;
+      })
+      .join("");
+  }
+
   async function loadModels() {
     try {
       const res = await fetch(`${API_BASE}/models`);
-      const models = await res.json();
-      modelSelect.innerHTML = models
-        .map((m) => `<option value="${m.id}">${m.id} (${m.context_window.toLocaleString()} ctx)</option>`)
-        .join("");
-      const preferred = models.find((m) => m.id === "gpt-4o");
-      if (preferred) modelSelect.value = "gpt-4o";
+      modelsData = await res.json();
     } catch (e) {
-      modelSelect.innerHTML = `<option value="gpt-4o">gpt-4o</option>`;
+      modelsData = [];
     }
+    modelSelect.innerHTML = modelOptionsHtml("gpt-4o");
+    // Fill in any archetype rows already on the page (they start with a
+    // placeholder single option before models load).
+    document.querySelectorAll(".archetype-model").forEach((sel) => {
+      const current = sel.dataset.preferredModel || sel.value;
+      sel.innerHTML = modelOptionsHtml(current);
+    });
   }
 
   function statusColor(status) {
@@ -244,8 +357,163 @@
     resultPanel.classList.remove("hidden");
   }
 
+  // ---------- Traffic projection ----------
+
+  const archetypeList = document.getElementById("archetypeList");
+  const projectError = document.getElementById("projectError");
+  const projectionResult = document.getElementById("projectionResult");
+  const projectBtn = document.getElementById("projectBtn");
+  let archetypeCounter = 0;
+
+  function addArchetypeRow(prefill) {
+    prefill = prefill || {};
+    const id = archetypeCounter++;
+    const card = document.createElement("div");
+    card.className = "archetype-card";
+    card.dataset.archetypeId = id;
+    card.innerHTML = `
+      <button type="button" class="remove-btn" data-remove>Remove</button>
+      <div class="row name-volume">
+        <div>
+          <label>Request type name</label>
+          <input type="text" class="archetype-name" value="${prefill.name || ""}" placeholder="e.g. chat reply" />
+        </div>
+        <div>
+          <label>Expected volume (requests)</label>
+          <input type="number" class="archetype-volume" min="0" value="${prefill.volume != null ? prefill.volume : 1000}" />
+        </div>
+      </div>
+      <label style="margin-top:12px;">Sample prompt</label>
+      <textarea class="archetype-prompt" placeholder="A typical example of this request.">${prefill.prompt || ""}</textarea>
+      <div class="row">
+        <div>
+          <label>Model</label>
+          <select class="archetype-model" data-preferred-model="${prefill.model || "gpt-4o"}">${modelOptionsHtml(prefill.model || "gpt-4o")}</select>
+        </div>
+        <div>
+          <label>Expected output tokens</label>
+          <input type="number" class="archetype-output" min="0" value="${prefill.expected_output_tokens != null ? prefill.expected_output_tokens : 200}" />
+        </div>
+      </div>
+    `;
+    archetypeList.appendChild(card);
+  }
+
+  archetypeList.addEventListener("click", (e) => {
+    if (e.target.matches("[data-remove]")) {
+      e.target.closest(".archetype-card").remove();
+    }
+  });
+
+  document.getElementById("addArchetypeBtn").addEventListener("click", () => addArchetypeRow());
+
+  function collectArchetypes() {
+    return Array.from(document.querySelectorAll(".archetype-card")).map((card) => ({
+      name: card.querySelector(".archetype-name").value.trim() || "Untitled",
+      volume: parseInt(card.querySelector(".archetype-volume").value || "0", 10),
+      prompt: card.querySelector(".archetype-prompt").value,
+      model: card.querySelector(".archetype-model").value,
+      expected_output_tokens: parseInt(card.querySelector(".archetype-output").value || "0", 10),
+    }));
+  }
+
+  async function runProjection() {
+    projectError.classList.add("hidden");
+    projectionResult.classList.add("hidden");
+
+    const archetypes = collectArchetypes();
+    if (archetypes.length === 0) {
+      projectError.textContent = "Add at least one request type.";
+      projectError.classList.remove("hidden");
+      return;
+    }
+    const missingPrompt = archetypes.find((a) => !a.prompt.trim());
+    if (missingPrompt) {
+      projectError.textContent = `"${missingPrompt.name}" needs a sample prompt.`;
+      projectError.classList.remove("hidden");
+      return;
+    }
+
+    projectBtn.disabled = true;
+    projectBtn.textContent = "Projecting…";
+
+    try {
+      const res = await fetch(`${API_BASE}/project`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archetypes }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Request failed.");
+      renderProjection(data);
+    } catch (e) {
+      projectError.textContent = e.message;
+      projectError.classList.remove("hidden");
+    } finally {
+      projectBtn.disabled = false;
+      projectBtn.textContent = "Run projection";
+    }
+  }
+
+  function renderProjection(r) {
+    const rows = document.getElementById("projectionRows");
+    rows.innerHTML = r.archetypes
+      .map((a) => {
+        const perReq = a.unit.estimated_total_tokens.toLocaleString();
+        return `
+          <tr>
+            <td>${a.name}</td>
+            <td>${a.model}</td>
+            <td>${a.volume.toLocaleString()}</td>
+            <td>${perReq}</td>
+            <td>${a.projected_total_tokens.toLocaleString()}</td>
+            <td>${fmtMoney(a.projected_cost)}</td>
+          </tr>`;
+      })
+      .join("");
+
+    document.getElementById("totalVolume").textContent = r.total_volume.toLocaleString();
+    document.getElementById("totalTokens2").textContent = r.total_tokens.toLocaleString();
+    document.getElementById("totalCost2").textContent = fmtMoney(r.total_cost);
+
+    const exceededNote = document.getElementById("exceededNote");
+    if (r.any_exceeded) {
+      exceededNote.textContent = "One or more request types already exceed their model's context window on their own — fix those before trusting the total.";
+      exceededNote.classList.remove("hidden");
+    } else {
+      exceededNote.classList.add("hidden");
+    }
+
+    const breakdown = document.getElementById("modelBreakdown");
+    breakdown.innerHTML = Object.entries(r.cost_by_model)
+      .map(([model, cost]) => `<span class="model-chip">${model}: <b>${fmtMoney(cost)}</b></span>`)
+      .join("");
+
+    projectionResult.classList.remove("hidden");
+  }
+
+  projectBtn.addEventListener("click", runProjection);
   analyzeBtn.addEventListener("click", runAnalysis);
-  loadModels();
+
+  // Load the real model list first, then seed the example rows — avoids a
+  // flash where their dropdowns briefly only offer the "gpt-4o" fallback
+  // before the real list arrives.
+  loadModels().then(() => {
+    addArchetypeRow({
+      name: "chat reply",
+      volume: 10000,
+      prompt: "Hi there, how can I help you today?",
+      model: "gpt-4o-mini",
+      expected_output_tokens: 80,
+    });
+    addArchetypeRow({
+      name: "doc summary",
+      volume: 500,
+      prompt: "Summarize this document for the user in three bullet points.",
+      model: "claude-3-5-sonnet",
+      expected_output_tokens: 300,
+    });
+  });
 </script>
 </body>
 </html>
