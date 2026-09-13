@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — AI Request Intelligence</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  textarea, select, input {
+    width: 100%;
+    background: #0f1115;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  .row { display: flex; gap: 12px; margin-top: 14px; }
+  .row > div { flex: 1; }
+  button {
+    margin-top: 18px;
+    background: var(--accent);
+    color: #0f1115;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .error { color: var(--exceeded); font-size: 13px; margin-top: 10px; }
+  .result-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-weight: 600; }
+  .status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+  .status-SAFE { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .status-WARNING { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .status-EXCEEDED { background: rgba(242,85,90,0.15); color: var(--exceeded); }
+  .bar-track { height: 8px; border-radius: 4px; background: #262a33; overflow: hidden; margin-top: 8px; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AIRI — AI Request Intelligence</h1>
+    <p class="sub">Estimate tokens, context usage and cost for a request before you send it to a model.</p>
+
+    <div class="panel">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="Explain quantum computing simply."></textarea>
+
+      <div class="row">
+        <div>
+          <label for="model">Model</label>
+          <select id="model"></select>
+        </div>
+        <div>
+          <label for="outputTokens">Expected output tokens (optional)</label>
+          <input id="outputTokens" type="number" min="0" value="500" />
+        </div>
+      </div>
+
+      <button id="analyzeBtn">Analyze request</button>
+      <div id="error" class="error hidden"></div>
+    </div>
+
+    <div id="resultPanel" class="panel hidden">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <div>
+          <span id="statusBadge" class="status-badge"></span>
+        </div>
+        <div class="meta" id="methodMeta"></div>
+      </div>
+
+      <div class="result-grid">
+        <div class="stat">
+          <div class="label">Input tokens</div>
+          <div class="value" id="inputTokens">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Estimated output tokens</div>
+          <div class="value" id="outputTokensVal">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Estimated total tokens</div>
+          <div class="value" id="totalTokens">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Estimated cost (USD)</div>
+          <div class="value" id="cost">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;">
+        <div class="label" style="display:flex; justify-content:space-between;">
+          <span>Context window usage</span>
+          <span id="contextPct">—</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" id="contextBar"></div></div>
+        <div class="meta" id="contextMeta"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // The frontend is deployed separately (GitHub Pages) from the API
+  // (Render), so calls need an absolute URL. If you redeploy the API
+  // under a different name/host, update this one line.
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+
+  const modelSelect = document.getElementById("model");
+  const analyzeBtn = document.getElementById("analyzeBtn");
+  const errorEl = document.getElementById("error");
+  const resultPanel = document.getElementById("resultPanel");
+
+  async function loadModels() {
+    try {
+      const res = await fetch(`${API_BASE}/models`);
+      const models = await res.json();
+      modelSelect.innerHTML = models
+        .map((m) => `<option value="${m.id}">${m.id} (${m.context_window.toLocaleString()} ctx)</option>`)
+        .join("");
+      const preferred = models.find((m) => m.id === "gpt-4o");
+      if (preferred) modelSelect.value = "gpt-4o";
+    } catch (e) {
+      modelSelect.innerHTML = `<option value="gpt-4o">gpt-4o</option>`;
+    }
+  }
+
+  function statusColor(status) {
+    if (status === "SAFE") return "var(--safe)";
+    if (status === "WARNING") return "var(--warning)";
+    return "var(--exceeded)";
+  }
+
+  function fmtMoney(v) {
+    if (v < 0.01) return "$" + v.toFixed(6);
+    return "$" + v.toFixed(4);
+  }
+
+  async function runAnalysis() {
+    const prompt = document.getElementById("prompt").value.trim();
+    const model = modelSelect.value;
+    const expected_output_tokens = parseInt(document.getElementById("outputTokens").value || "0", 10);
+
+    errorEl.classList.add("hidden");
+    resultPanel.classList.add("hidden");
+
+    if (!prompt) {
+      errorEl.textContent = "Enter a prompt first.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = "Analyzing…";
+
+    try {
+      const res = await fetch(`${API_BASE}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, model, expected_output_tokens }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Request failed.");
+      renderResult(data);
+    } catch (e) {
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
+    } finally {
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = "Analyze request";
+    }
+  }
+
+  function renderResult(r) {
+    document.getElementById("statusBadge").textContent = r.status;
+    document.getElementById("statusBadge").className = "status-badge status-" + r.status;
+
+    const confidenceNote = r.known_model
+      ? `method: ${r.method} · confidence: ${r.confidence}`
+      : `method: ${r.method} · confidence: ${r.confidence} · "${r.model}" isn't in the registry — using a default context window`;
+    document.getElementById("methodMeta").textContent = confidenceNote;
+
+    document.getElementById("inputTokens").textContent = r.input_tokens.toLocaleString();
+    document.getElementById("outputTokensVal").textContent = r.estimated_output_tokens.toLocaleString();
+    document.getElementById("totalTokens").textContent = r.estimated_total_tokens.toLocaleString();
+    document.getElementById("cost").textContent = fmtMoney(r.estimated_cost);
+
+    const pct = Math.min(100, r.context_utilization * 100);
+    document.getElementById("contextPct").textContent = (r.context_utilization * 100).toFixed(2) + "%";
+    const bar = document.getElementById("contextBar");
+    bar.style.width = pct + "%";
+    bar.style.background = statusColor(r.status);
+    document.getElementById("contextMeta").textContent =
+      `${r.estimated_total_tokens.toLocaleString()} / ${r.context_window.toLocaleString()} tokens`;
+
+    resultPanel.classList.remove("hidden");
+  }
+
+  analyzeBtn.addEventListener("click", runAnalysis);
+  loadModels();
+</script>
+</body>
+</html>
