@@ -1186,9 +1186,18 @@
       renderLoadTestSummary(reportData);
 
       try {
-        sessionStorage.setItem(REPORT_STORAGE_KEY, JSON.stringify({ run_name: runName, records }));
+        // localStorage, not sessionStorage: the "Open full report" link opens
+        // report.html with rel="noopener" (deliberately, so that page never
+        // gets a window.opener reference back to this one). But per the HTML
+        // spec, sessionStorage is only cloned into a new tab when it keeps an
+        // opener relationship to the tab that created it — noopener breaks
+        // exactly that, so a new tab opened this way never sees anything
+        // written to sessionStorage here, however recently. localStorage has
+        // no such requirement (it's just per-origin, not per-opener-lineage),
+        // so it's the only one of the two that actually reaches the new tab.
+        localStorage.setItem(REPORT_STORAGE_KEY, JSON.stringify({ run_name: runName, records }));
       } catch (storageErr) {
-        console.warn("Could not save report payload to sessionStorage:", storageErr);
+        console.warn("Could not save report payload to localStorage:", storageErr);
       }
     } catch (e) {
       loadTestError.textContent = e.message;

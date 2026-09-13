@@ -144,7 +144,12 @@
   }
 
   async function loadReport() {
-    const raw = sessionStorage.getItem(REPORT_STORAGE_KEY);
+    // localStorage, not sessionStorage — see the matching comment in
+    // index.html next to where this key is written: the link into this page
+    // uses rel="noopener", which prevents a new tab from inheriting the
+    // opener tab's sessionStorage at all, so sessionStorage here would always
+    // read back empty regardless of what index.html just wrote.
+    const raw = localStorage.getItem(REPORT_STORAGE_KEY);
     if (!raw) return; // emptyState stays visible
 
     let payload;
