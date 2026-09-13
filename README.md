@@ -27,12 +27,14 @@ build intentionally skips.
   the founder/author profile shown on `frontend/author.html`, and the
   `/config`/`/admin/*`/`/author` API reference.
 - **[docs/WORKSPACES.md](docs/WORKSPACES.md)** — workspaces/projects
-  (`frontend/workspaces.html`, Phases 1–4): the app-key delete-confirmation
+  (`frontend/workspaces.html`, Phases 1–5): the app-key delete-confirmation
   PIN, tech-stack categories, running AIRI's tools inside a project with
   saved history, the per-project Dashboard/Notes/Actions tabs and
   downloadable consolidated PDF report, the cross-project comparison tab
-  with its own PDF report, per-run PDF downloads, and the full
-  `/profile`/`/workspaces`/`/projects` API reference.
+  with its own PDF report, per-run PDF downloads, real team-member
+  access with admin/member roles and an access-code sign-in, and the
+  full `/profile`/`/workspaces`/`/projects`/`/auth/member-login` API
+  reference.
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
 
@@ -100,7 +102,7 @@ airi/                   core library — zero web/db/cloud dependencies
   pricing.py                 cost = tokens x registry price
   registry.py                  model -> context window, price, tokenizer family, provider
   models.py                     AnalysisResult
-  auth.py                 API-layer only: OTP code hashing + JWT sessions (pure, no I/O), incl. admin tokens
+  auth.py                 API-layer only: OTP code hashing + JWT sessions (pure, no I/O), incl. admin tokens + team-member access-code generation/verification
   db.py                   API-layer only: Neon/Postgres access for users + otp_codes + app_config
   email_provider.py       API-layer only: sends the OTP email via Resend
   exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
@@ -111,7 +113,7 @@ airi/                   core library — zero web/db/cloud dependencies
   notes.py                API-layer only: note-body validation for a project's comment history (pure logic)
   consolidated_report.py  API-layer only: rolls up a project's saved tool runs + notes into one report, plus a single-run PDF template; HTML/PDF templates included (pure logic)
   comparison.py           API-layer only: rolls up every project in a workspace (reusing consolidated_report's per-run normalization) into a ranked cross-project comparison, HTML/PDF template included (pure logic)
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /author, /download, /models, /health, /profile, /workspaces/*(+/comparison(.pdf)), /projects/*(+/tools/*/runs(+/pdf), +/notes, +/report/consolidated(.pdf))
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*(incl. /auth/member-login), /analyze/exact, /config, /admin/*, /author, /download, /models, /health, /profile, /workspaces/*(+/members/*(/disable,/enable,/regenerate-code), +/comparison(.pdf)), /projects/*(+/tools/*/runs(+/pdf), +/notes, +/report/consolidated(.pdf))
 frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
 frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment checklist + author-profile editor
@@ -119,14 +121,15 @@ frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a
 frontend/developers.html  API quick reference + compiled-core-library download button (GET /download; source is not distributed)
 frontend/author.html   public founder/about page, built entirely from the admin-edited author profile
 frontend/privacy.html  privacy policy, linked from every page's footer
-frontend/workspaces.html  signed-in workspaces/projects app (Phase 1: CRUD + app-key delete confirmation; Phase 2: AIRI tools runnable per project with saved run history; Phase 3: Dashboard/Notes/Actions tabs + downloadable consolidated PDF report; Phase 4: cross-project comparison tab + PDF report + per-run PDF downloads)
+frontend/workspaces.html  signed-in workspaces/projects app (Phase 1: CRUD + app-key delete confirmation; Phase 2: AIRI tools runnable per project with saved run history; Phase 3: Dashboard/Notes/Actions tabs + downloadable consolidated PDF report; Phase 4: cross-project comparison tab + PDF report + per-run PDF downloads; Phase 5: real team-member access — admin/member roles, access-code sign-in, disable/enable/regenerate)
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
 sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode + author profile)
 sql/003_workspaces_schema.sql  Neon schema for user_profile/workspaces/workspace_members/projects
 sql/004_project_tool_runs.sql  Neon schema for saved per-project AIRI tool runs
 sql/005_project_notes.sql  Neon schema for a project's notes/comments history
+sql/006_workspace_member_access.sql  Neon schema adding real team-member access (user_id/status/access_code_hash) to workspace_members
 tests/                  sanity checks for every module above
-docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page), WORKSPACES.md (workspaces/projects Phases 1-4)
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page), WORKSPACES.md (workspaces/projects Phases 1-5)
 ```
 
 The core library never imports FastAPI, and never makes a network call

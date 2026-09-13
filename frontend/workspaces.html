@@ -158,6 +158,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+    flex-wrap: wrap;
     background: #0f1115;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -255,7 +256,7 @@
     <!-- ---------- Sign-in gate ---------- -->
     <div id="signInView">
       <h1>Workspaces</h1>
-      <p class="sub">Organize your projects into workspaces, invite your team, and (soon) run every AIRI
+      <p class="sub">Organize your projects into workspaces, invite your team, and run every AIRI
         tool per project with a shared dashboard. Sign in with a one-time email code to continue —
         the same sign-in used for Exact mode on the main page.</p>
       <div class="panel">
@@ -264,6 +265,7 @@
           <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
           <div class="row"><div><button type="button" id="sendCodeBtn" style="width:100%;">Send code</button></div></div>
           <div id="authError1" class="error hidden"></div>
+          <p class="sub" style="margin:14px 0 0;font-size:12px;">Team member? <button type="button" id="showMemberLoginBtn" class="link-btn">Sign in with your access code</button> instead.</p>
         </div>
         <div id="authStep2" class="hidden">
           <label for="authCodeInput">6-digit code (check your email)</label>
@@ -273,6 +275,20 @@
             <div><button type="button" id="resendCodeBtn" class="secondary-btn" style="width:100%;">Resend code</button></div>
           </div>
           <div id="authError2" class="error hidden"></div>
+        </div>
+        <div id="authMemberStep" class="hidden">
+          <p class="sub" style="margin:0 0 14px;">Sign in with the email and access code your workspace admin gave you.
+            This code is your ongoing login — it doesn't expire, and works until your admin disables it or
+            issues you a new one.</p>
+          <label for="memberEmailInput">Email</label>
+          <input id="memberEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+          <div class="field">
+            <label for="memberCodeInput">Access code</label>
+            <input id="memberCodeInput" placeholder="e.g. AB12CD34EF" autocomplete="off" style="text-transform:uppercase; letter-spacing:0.15em;" />
+          </div>
+          <div class="row"><div><button type="button" id="memberLoginBtn" style="width:100%;">Sign in</button></div></div>
+          <div id="authErrorMember" class="error hidden"></div>
+          <p class="sub" style="margin:14px 0 0;font-size:12px;">Workspace admin? <button type="button" id="showEmailLoginBtn" class="link-btn">Sign in with an email code</button> instead.</p>
         </div>
       </div>
     </div>
@@ -356,12 +372,19 @@
 
         <div class="panel">
           <h2>Team members</h2>
-          <p class="sub" style="margin:0 0 10px;">Each member gets a standard email notification when added or removed.</p>
-          <div class="row">
-            <div><input id="newMemberEmail" type="email" placeholder="teammate@example.com" /></div>
-            <div style="flex:0;"><button type="button" id="addMemberBtn">Add</button></div>
+          <p class="sub" style="margin:0 0 10px;">Each member gets a standard email notification when added or
+            removed, plus a persistent access code (shown once) to sign in with — they can run every tool and
+            add/delete notes and tool runs inside this workspace's projects, but can't create or delete a
+            workspace or project, edit basic details, or manage other members.</p>
+          <div id="addMemberSection">
+            <div class="row">
+              <div><input id="newMemberEmail" type="email" placeholder="teammate@example.com" /></div>
+              <div style="flex:0;"><button type="button" id="addMemberBtn">Add</button></div>
+            </div>
+            <div id="addMemberError" class="error hidden"></div>
+            <div id="newMemberCodeNotice" class="notice hidden"></div>
           </div>
-          <div id="addMemberError" class="error hidden"></div>
+          <div id="membersActionError" class="error hidden"></div>
           <div id="membersList"></div>
           <div id="membersEmptyState" class="empty-state hidden">No team members yet.</div>
         </div>
@@ -377,26 +400,32 @@
           <div id="projectsList"></div>
           <div id="projectsEmptyState" class="empty-state hidden">No projects yet — add your first one below.</div>
 
-          <h3 style="margin-top:20px;">New project</h3>
-          <div class="field">
-            <label for="newProjTitle">Title <span class="required-mark">*</span></label>
-            <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
-          </div>
-          <div class="field">
-            <label for="newProjDescription">Description</label>
-            <textarea id="newProjDescription"></textarea>
-          </div>
-          <div id="newProjTechStack" class="tech-grid"></div>
-          <div class="row"><div><button type="button" id="createProjectBtn">Add project</button></div></div>
-          <div id="createProjectError" class="error hidden"></div>
+          <div id="newProjectSection">
+            <h3 style="margin-top:20px;">New project</h3>
+            <div class="field">
+              <label for="newProjTitle">Title <span class="required-mark">*</span></label>
+              <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
+            </div>
+            <div class="field">
+              <label for="newProjDescription">Description</label>
+              <textarea id="newProjDescription"></textarea>
+            </div>
+            <div id="newProjTechStack" class="tech-grid"></div>
+            <div class="row"><div><button type="button" id="createProjectBtn">Add project</button></div></div>
+            <div id="createProjectError" class="error hidden"></div>
 
-          <div class="tab-note">
-            Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
-            report tools inside it — every run is saved to that project's history, and every saved
-            run (and each project's consolidated findings) is downloadable as its own PDF. Each
-            project also gets a Dashboard (charts across all saved runs) and a Notes tab (a
-            timestamped comment history). Once this workspace has 2+ projects, a "Project comparison"
-            section appears above, comparing them side by side with its own downloadable report.
+            <div class="tab-note">
+              Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
+              report tools inside it — every run is saved to that project's history, and every saved
+              run (and each project's consolidated findings) is downloadable as its own PDF. Each
+              project also gets a Dashboard (charts across all saved runs) and a Notes tab (a
+              timestamped comment history). Once this workspace has 2+ projects, a "Project comparison"
+              section appears above, comparing them side by side with its own downloadable report.
+            </div>
+          </div>
+          <div id="memberProjectNote" class="tab-note hidden">
+            Only the workspace admin can create or delete projects, or edit their basic details —
+            open a project below to run tools and add notes.
           </div>
         </div>
       </div>
@@ -484,6 +513,11 @@
     localStorage.removeItem(AUTH_EMAIL_KEY);
     appView.classList.add("hidden");
     signInView.classList.remove("hidden");
+    // Reset back to the default (email+OTP) step, whichever step was
+    // showing when they signed out.
+    document.getElementById("authMemberStep").classList.add("hidden");
+    authStep2.classList.add("hidden");
+    authStep1.classList.remove("hidden");
   }
 
   async function apiFetch(path, options = {}) {
@@ -572,6 +606,61 @@
   document.getElementById("verifyCodeBtn").addEventListener("click", verifyCode);
   document.getElementById("resendCodeBtn").addEventListener("click", requestCode);
   document.getElementById("signOutBtn").addEventListener("click", signOut);
+
+  // ---------- sign-in (team member access code) ----------
+
+  const authMemberStep = document.getElementById("authMemberStep");
+  const authErrorMember = document.getElementById("authErrorMember");
+  const memberLoginBtn = document.getElementById("memberLoginBtn");
+
+  document.getElementById("showMemberLoginBtn").addEventListener("click", () => {
+    authStep1.classList.add("hidden");
+    authStep2.classList.add("hidden");
+    authMemberStep.classList.remove("hidden");
+    document.getElementById("memberEmailInput").focus();
+  });
+
+  document.getElementById("showEmailLoginBtn").addEventListener("click", () => {
+    authMemberStep.classList.add("hidden");
+    authStep2.classList.add("hidden");
+    authStep1.classList.remove("hidden");
+    document.getElementById("authEmailInput").focus();
+  });
+
+  async function memberLogin() {
+    authErrorMember.classList.add("hidden");
+    const email = document.getElementById("memberEmailInput").value.trim();
+    const code = document.getElementById("memberCodeInput").value.trim();
+    if (!email || !code) {
+      authErrorMember.textContent = "Enter your email and access code.";
+      authErrorMember.classList.remove("hidden");
+      return;
+    }
+    memberLoginBtn.disabled = true;
+    memberLoginBtn.textContent = "Signing in…";
+    try {
+      const res = await fetch(`${API_BASE}/auth/member-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Sign-in failed.");
+      authToken = data.token;
+      authEmail = data.email;
+      localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+      localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      await enterApp();
+    } catch (e) {
+      authErrorMember.textContent = e.message;
+      authErrorMember.classList.remove("hidden");
+    } finally {
+      memberLoginBtn.disabled = false;
+      memberLoginBtn.textContent = "Sign in";
+    }
+  }
+
+  memberLoginBtn.addEventListener("click", memberLogin);
 
   // ---------- app key (profile) ----------
 
@@ -672,8 +761,9 @@
       card.className = "ws-card";
       card.dataset.id = w.id;
       const target = w.target ? `<p class="target">${escapeHtml(w.target)}</p>` : "";
+      const roleChip = w.role === "member" ? ` <span class="stack-chip">(team member)</span>` : "";
       card.innerHTML = `
-        <h3>${escapeHtml(w.title)}</h3>
+        <h3>${escapeHtml(w.title)}${roleChip}</h3>
         ${target}
         <div class="counts">${w.member_count} member${w.member_count === 1 ? "" : "s"} · ${w.project_count} project${w.project_count === 1 ? "" : "s"}</div>
       `;
@@ -730,10 +820,31 @@
     wsTargetInput.value = currentWorkspace.target;
     wsDescriptionInput.value = currentWorkspace.description;
     wsSaveError.classList.add("hidden");
+    applyWorkspaceRoleUi();
     renderMembers();
     renderProjects();
     workspaceListView.classList.add("hidden");
     workspaceDetailView.classList.remove("hidden");
+  }
+
+  // Whoever created a workspace is its "admin" — everyone else who can
+  // reach it is an active team member (see sql/006_workspace_member_access.sql).
+  // A member gets full working access to every project (run tools, save
+  // results, add/delete their own notes and tool runs) but never touches
+  // workspace/project identity (create/delete either, edit basic details)
+  // or membership management — the backend enforces all of this with a
+  // 403 regardless, this just keeps the UI from offering controls a
+  // member's every click would bounce off.
+  function applyWorkspaceRoleUi() {
+    const isAdmin = currentWorkspace.role === "admin";
+    document.getElementById("deleteWsBtn").classList.toggle("hidden", !isAdmin);
+    [wsTitleInput, wsTargetInput, wsDescriptionInput].forEach((el) => { el.disabled = !isAdmin; });
+    document.getElementById("wsAutosaveNote").textContent = isAdmin
+      ? "Changes save automatically."
+      : "Only the workspace admin can edit these details.";
+    document.getElementById("addMemberSection").classList.toggle("hidden", !isAdmin);
+    document.getElementById("newProjectSection").classList.toggle("hidden", !isAdmin);
+    document.getElementById("memberProjectNote").classList.toggle("hidden", isAdmin);
   }
 
   function scheduleWsAutosave() {
@@ -783,30 +894,108 @@
   const membersList = document.getElementById("membersList");
   const membersEmptyState = document.getElementById("membersEmptyState");
 
+  function showAccessCodeNotice(email, code) {
+    const el = document.getElementById("newMemberCodeNotice");
+    el.innerHTML = `Access code for <b>${escapeHtml(email)}</b>: <b style="letter-spacing:0.15em;">${escapeHtml(code)}</b>
+      <button type="button" id="copyMemberCodeBtn" class="link-btn" style="margin-left:8px;">Copy</button>
+      <br />Relay this to them yourself (chat, in person) — copy it now, AIRI won't show it again.`;
+    el.classList.remove("hidden");
+    const copyBtn = document.getElementById("copyMemberCodeBtn");
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(code);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+      } catch (e) {
+        // Clipboard API unavailable (e.g. insecure context) — the code is
+        // still right there in plain text above for them to select.
+      }
+    });
+  }
+
   function renderMembers() {
     membersList.innerHTML = "";
     const members = currentWorkspace.members || [];
+    const isAdmin = currentWorkspace.role === "admin";
+    const actionErrorEl = document.getElementById("membersActionError");
     membersEmptyState.classList.toggle("hidden", members.length > 0);
     for (const m of members) {
       const row = document.createElement("div");
       row.className = "member-row";
-      row.innerHTML = `<span>${escapeHtml(m.email)}</span>`;
-      const removeBtn = document.createElement("button");
-      removeBtn.type = "button";
-      removeBtn.className = "danger-btn";
-      removeBtn.textContent = "Remove";
-      removeBtn.addEventListener("click", () => {
-        openConfirmModal(
-          "Remove this team member?",
-          `${m.email} will be removed from "${currentWorkspace.title}" and notified by email.`,
-          async (appKey) => {
-            await apiFetch(`/workspaces/${currentWorkspace.id}/members/${m.id}`, { method: "DELETE" });
-            currentWorkspace.members = currentWorkspace.members.filter((x) => x.id !== m.id);
+      const disabled = m.status === "disabled";
+      const statusChip = disabled
+        ? `<span class="stack-chip" style="color:var(--exceeded);">disabled</span>`
+        : `<span class="stack-chip" style="color:var(--safe);">active</span>`;
+      row.innerHTML = `<span>${escapeHtml(m.email)} ${statusChip}</span>`;
+
+      if (isAdmin) {
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex; gap:6px; flex-wrap:wrap;";
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "secondary-btn";
+        toggleBtn.textContent = disabled ? "Enable" : "Disable";
+        toggleBtn.title = disabled
+          ? "Restore this member's access — their existing code keeps working."
+          : "Revoke this member's access without removing them or their history.";
+        toggleBtn.addEventListener("click", async () => {
+          actionErrorEl.classList.add("hidden");
+          toggleBtn.disabled = true;
+          try {
+            const action = disabled ? "enable" : "disable";
+            const updated = await apiFetch(`/workspaces/${currentWorkspace.id}/members/${m.id}/${action}`, { method: "POST" });
+            Object.assign(m, updated);
             renderMembers();
+          } catch (e) {
+            actionErrorEl.textContent = e.message;
+            actionErrorEl.classList.remove("hidden");
+            toggleBtn.disabled = false;
           }
-        );
-      });
-      row.appendChild(removeBtn);
+        });
+
+        const regenBtn = document.createElement("button");
+        regenBtn.type = "button";
+        regenBtn.className = "secondary-btn";
+        regenBtn.textContent = "Regenerate code";
+        regenBtn.title = "Issue a new access code — the old one stops working immediately.";
+        regenBtn.addEventListener("click", async () => {
+          actionErrorEl.classList.add("hidden");
+          regenBtn.disabled = true;
+          try {
+            const updated = await apiFetch(`/workspaces/${currentWorkspace.id}/members/${m.id}/regenerate-code`, { method: "POST" });
+            Object.assign(m, updated);
+            renderMembers();
+            showAccessCodeNotice(m.email, updated.access_code);
+          } catch (e) {
+            actionErrorEl.textContent = e.message;
+            actionErrorEl.classList.remove("hidden");
+          } finally {
+            regenBtn.disabled = false;
+          }
+        });
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "danger-btn";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          openConfirmModal(
+            "Remove this team member?",
+            `${m.email} will be removed from "${currentWorkspace.title}" and notified by email — their access code stops working immediately.`,
+            async (appKey) => {
+              await apiFetch(`/workspaces/${currentWorkspace.id}/members/${m.id}`, { method: "DELETE" });
+              currentWorkspace.members = currentWorkspace.members.filter((x) => x.id !== m.id);
+              renderMembers();
+            }
+          );
+        });
+
+        actions.appendChild(toggleBtn);
+        actions.appendChild(regenBtn);
+        actions.appendChild(removeBtn);
+        row.appendChild(actions);
+      }
       membersList.appendChild(row);
     }
   }
@@ -814,6 +1003,7 @@
   document.getElementById("addMemberBtn").addEventListener("click", async () => {
     const errorEl = document.getElementById("addMemberError");
     errorEl.classList.add("hidden");
+    document.getElementById("newMemberCodeNotice").classList.add("hidden");
     const emailInput = document.getElementById("newMemberEmail");
     const email = emailInput.value.trim();
     try {
@@ -821,6 +1011,7 @@
       currentWorkspace.members.push(member);
       emailInput.value = "";
       renderMembers();
+      showAccessCodeNotice(member.email, member.access_code);
     } catch (e) {
       errorEl.textContent = e.message;
       errorEl.classList.remove("hidden");
@@ -833,7 +1024,7 @@
   const projectsEmptyState = document.getElementById("projectsEmptyState");
   const newProjTechStack = document.getElementById("newProjTechStack");
 
-  function techStackFieldsHtml(idPrefix, values) {
+  function techStackFieldsHtml(idPrefix, values, disabled) {
     values = values || {};
     let html = "";
     for (const key of Object.keys(techStackCategories)) {
@@ -843,7 +1034,7 @@
       html += `
         <div class="field">
           <label for="${idPrefix}-${key}">${escapeHtml(meta.label)}${required}</label>
-          <input id="${idPrefix}-${key}" data-tech-key="${key}" value="${escapeHtml(val)}" />
+          <input id="${idPrefix}-${key}" data-tech-key="${key}" value="${escapeHtml(val)}"${disabled ? " disabled" : ""} />
         </div>
       `;
     }
@@ -873,6 +1064,7 @@
   function renderProjects() {
     projectsList.innerHTML = "";
     const projects = currentWorkspace.projects || [];
+    const isAdmin = currentWorkspace.role === "admin";
     projectsEmptyState.classList.toggle("hidden", projects.length > 0);
     for (const p of projects) {
       const row = document.createElement("div");
@@ -903,18 +1095,20 @@
         <div class="proj-tab-panel" data-panel="details">
           <div class="field">
             <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
-            <input id="${idPrefix}-title" value="${escapeHtml(p.title)}" />
+            <input id="${idPrefix}-title" value="${escapeHtml(p.title)}"${isAdmin ? "" : " disabled"} />
           </div>
           <div class="field">
             <label for="${idPrefix}-description">Description</label>
-            <textarea id="${idPrefix}-description">${escapeHtml(p.description)}</textarea>
+            <textarea id="${idPrefix}-description"${isAdmin ? "" : " disabled"}>${escapeHtml(p.description)}</textarea>
           </div>
           <div class="tech-grid" id="${idPrefix}-stack"></div>
+          ${isAdmin ? `
           <div class="row">
             <div><button type="button" class="save-project-btn" style="width:100%;">Save</button></div>
             <div style="flex:0;"><button type="button" class="danger-btn delete-project-btn">Delete</button></div>
           </div>
           <div class="error hidden save-project-error"></div>
+          ` : `<p class="sub" style="margin-top:10px;">Only the workspace admin can edit or delete this project.</p>`}
         </div>
         <div class="proj-tab-panel hidden" data-panel="analyze"></div>
         <div class="proj-tab-panel hidden" data-panel="exact"></div>
@@ -930,37 +1124,39 @@
       row.appendChild(body);
       projectsList.appendChild(row);
 
-      document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack);
+      document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack, !isAdmin);
 
-      const saveErrorEl = body.querySelector(".save-project-error");
-      body.querySelector(".save-project-btn").addEventListener("click", async () => {
-        saveErrorEl.classList.add("hidden");
-        const payload = {
-          title: document.getElementById(`${idPrefix}-title`).value.trim(),
-          description: document.getElementById(`${idPrefix}-description`).value.trim(),
-          tech_stack: readTechStackFields(idPrefix),
-        };
-        try {
-          const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
-          Object.assign(p, updated);
-          renderProjects();
-        } catch (e) {
-          saveErrorEl.textContent = e.message;
-          saveErrorEl.classList.remove("hidden");
-        }
-      });
-
-      body.querySelector(".delete-project-btn").addEventListener("click", () => {
-        openConfirmModal(
-          "Delete this project?",
-          `"${p.title}" will be permanently deleted.`,
-          async (appKey) => {
-            await apiFetch(`/projects/${p.id}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
-            currentWorkspace.projects = currentWorkspace.projects.filter((x) => x.id !== p.id);
+      if (isAdmin) {
+        const saveErrorEl = body.querySelector(".save-project-error");
+        body.querySelector(".save-project-btn").addEventListener("click", async () => {
+          saveErrorEl.classList.add("hidden");
+          const payload = {
+            title: document.getElementById(`${idPrefix}-title`).value.trim(),
+            description: document.getElementById(`${idPrefix}-description`).value.trim(),
+            tech_stack: readTechStackFields(idPrefix),
+          };
+          try {
+            const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
+            Object.assign(p, updated);
             renderProjects();
+          } catch (e) {
+            saveErrorEl.textContent = e.message;
+            saveErrorEl.classList.remove("hidden");
           }
-        );
-      });
+        });
+
+        body.querySelector(".delete-project-btn").addEventListener("click", () => {
+          openConfirmModal(
+            "Delete this project?",
+            `"${p.title}" will be permanently deleted.`,
+            async (appKey) => {
+              await apiFetch(`/projects/${p.id}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
+              currentWorkspace.projects = currentWorkspace.projects.filter((x) => x.id !== p.id);
+              renderProjects();
+            }
+          );
+        });
+      }
 
       // Tool tabs — each tool's panel is built lazily the first time it's
       // opened (rather than for all 4 tools x every project up front).

@@ -519,31 +519,48 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
-## Workspaces & projects (Phases 1–4)
+## Workspaces & projects (Phases 1–5)
 
 See [docs/WORKSPACES.md](WORKSPACES.md) for the full concept, schema,
 and design rationale (the app-key delete-confirmation PIN, tech-stack
-categories). All endpoints below require
-`Authorization: Bearer <session token>` (from `POST /auth/verify-code`
-— the same sign-in `/analyze/exact` uses) and `401` without one. A
-workspace/project id belonging to another user returns `404`, same as
-one that doesn't exist.
+categories, roles and the access-code login). All endpoints below
+require `Authorization: Bearer <session token>` — from `POST
+/auth/verify-code` for a workspace's admin, or `POST
+/auth/member-login` for a team member (identical, fully-capable
+session tokens either way) — and `401` without one. Every endpoint
+checks the caller's relationship to the resource: no relationship at
+all → `404` (same as an id that doesn't exist); an active member
+hitting an admin-only action, or a *disabled* member hitting anything →
+`403`.
 
 | Endpoint | Purpose |
 |---|---|
+| `POST /auth/member-login` | Body `{"email", "code"}` — a team member's sign-in with their admin-issued access code. `400` on a wrong pair. Returns `{"token", "email"}`, same shape as `/auth/verify-code` |
 | `GET /profile` | `{"has_app_key": bool}` — never the key or its hash |
 | `POST /profile/app-key` | Body `{"app_key": "1234"}` (exactly 4 digits) — sets/changes it; `400` if malformed |
-| `GET /workspaces` | Every workspace this user owns, with `member_count`/`project_count` |
-| `POST /workspaces` | Body `{"title", "target", "description"}` (`title` required) |
-| `GET /workspaces/{id}` | Full detail incl. `members` and `projects` arrays — one call to restore everything on login |
-| `PUT /workspaces/{id}` | Same body as create — full replace of the three fields |
-| `DELETE /workspaces/{id}` | Body `{"app_key": "1234"}` — cascades to members/projects; `400` if the key is wrong or never set |
-| `POST /workspaces/{id}/members` | Body `{"email": "..."}` — `409` if already a member; sends a notification email (best-effort) |
-| `DELETE /workspaces/{id}/members/{member_id}` | Sends a removal notification email the same way |
+| `GET /workspaces` | Every workspace this user can reach — owned (`role: "admin"`) or as an active member (`role: "member"`) — with `member_count`/`project_count` |
+| `POST /workspaces` | Body `{"title", "target", "description"}` (`title` required) — creator becomes admin |
+| `GET /workspaces/{id}` | Admin or active member. Full detail incl. `role`, `members`, and `projects` arrays — one call to restore everything on login |
+| `PUT /workspaces/{id}` | **Admin-only.** Same body as create — full replace of the three fields |
+| `DELETE /workspaces/{id}` | **Admin-only.** Body `{"app_key": "1234"}` — cascades to members/projects; `400` if the key is wrong or never set |
+| `POST /workspaces/{id}/members` | **Admin-only.** Body `{"email": "..."}` — `409` if already a member; generates an access code, returns it once as `access_code`, and sends a notification email (best-effort, never containing the code) |
+| `DELETE /workspaces/{id}/members/{member_id}` | **Admin-only.** Hard delete — the code stops working immediately; sends a removal notification email the same way |
+| `POST /workspaces/{id}/members/{member_id}/disable` | **Admin-only.** Revokes access, keeps history |
+| `POST /workspaces/{id}/members/{member_id}/enable` | **Admin-only.** Restores access with the existing code |
+| `POST /workspaces/{id}/members/{member_id}/regenerate-code` | **Admin-only.** New code (returned once as `access_code`), old one invalidated |
 | `GET /projects/tech-stack-categories` | Public — the tech-stack category table (label + required/optional) |
-| `POST /workspaces/{id}/projects` | Body `{"title", "description", "tech_stack": {...}}` — `400` if `title` is blank or `tech_stack` is missing `ai_services`/`ai_model` |
-| `GET /projects/{id}` / `PUT /projects/{id}` | Same shape as create |
-| `DELETE /projects/{id}` | Body `{"app_key": "1234"}`, same gate as deleting a workspace |
+| `POST /workspaces/{id}/projects` | **Admin-only.** Body `{"title", "description", "tech_stack": {...}}` — `400` if `title` is blank or `tech_stack` is missing `ai_services`/`ai_model` |
+| `GET /projects/{id}` | Admin or active member |
+| `PUT /projects/{id}` | **Admin-only** (basic details: title, description, tech stack) |
+| `DELETE /projects/{id}` | **Admin-only.** Body `{"app_key": "1234"}`, same gate as deleting a workspace |
+
+Everything from here down — every tool-run endpoint, notes, the
+dashboard/consolidated report, and the comparison report — is
+**admin-or-active-member**: a team member has full working access
+inside any project they can reach.
+
+| Endpoint | Purpose |
+|---|---|
 | `POST /projects/{id}/tools/analyze/runs` | Same body as `POST /analyze` + optional `label` — runs it and saves the result |
 | `POST /projects/{id}/tools/exact/runs` | Same body as `POST /analyze/exact` + optional `label` — a BYOK key in the body is used for the call but never persisted |
 | `POST /projects/{id}/tools/project/runs` | Same body as `POST /project` + optional `label` |

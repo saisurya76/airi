@@ -29,11 +29,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 CREATE INDEX IF NOT EXISTS workspaces_owner_idx ON workspaces (owner_user_id);
 
--- Team members invited into a workspace by email. Phase 1: informational
--- (a notification email on add/remove) rather than a second login
--- identity — a member does not get their own access to the workspace
--- yet. That's flagged as a likely Phase-2 (team collaboration) piece in
--- docs/WORKSPACES.md, per the plan agreed with the workspace owner.
+-- Team members invited into a workspace by email. As of Phase 2 (see
+-- sql/006_workspace_member_access.sql, applied after this file) this is
+-- a real second login identity, not just a notify-list — that migration
+-- adds user_id/status/access_code_hash. Kept minimal here so 001-003
+-- still describe the original Phase 1 shape as historical record.
 CREATE TABLE IF NOT EXISTS workspace_members (
     id           BIGSERIAL PRIMARY KEY,
     workspace_id BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -61,8 +61,9 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE INDEX IF NOT EXISTS projects_workspace_idx ON projects (workspace_id);
 
--- Not built yet (later phases, see docs/WORKSPACES.md), but named here
--- so the eventual migration numbers stay predictable:
+-- Later phases, see docs/WORKSPACES.md:
 --   004 — project_tool_runs (saved results per AIRI tool tab — see
---         sql/004_project_tool_runs.sql, built in Phase 2)
+--         sql/004_project_tool_runs.sql)
 --   005 — project_notes (append-only comment history, per project)
+--   006 — real team-member access (roles, login codes, disable/enable —
+--         see sql/006_workspace_member_access.sql)

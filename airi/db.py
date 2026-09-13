@@ -225,20 +225,33 @@ def create_workspace(owner_user_id: int, title: str, target: str, description: s
         return cur.fetchone()
 
 
-def list_workspaces(owner_user_id: int) -> List[dict]:
-    """Includes a member/project count per workspace so the workspace-list
-    view doesn't need N follow-up queries."""
+def list_workspaces(user_id: int) -> List[dict]:
+    """Every workspace this user can reach: the ones they own (role
+    "admin") plus the ones where they're an active team member (role
+    "member") — see sql/006_workspace_member_access.sql. Includes a
+    member/project count per workspace so the workspace-list view
+    doesn't need N follow-up queries."""
     with _cursor() as cur:
         cur.execute(
-            f"""
-            SELECT w.*,
+            """
+            SELECT w.*, 'admin' AS role,
                    (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = w.id) AS member_count,
                    (SELECT count(*) FROM projects p WHERE p.workspace_id = w.id) AS project_count
             FROM workspaces w
-            WHERE w.owner_user_id = %s
-            ORDER BY w.created_at DESC
+            WHERE w.owner_user_id = %(user_id)s
+
+            UNION ALL
+
+            SELECT w.*, 'member' AS role,
+                   (SELECT count(*) FROM workspace_members m2 WHERE m2.workspace_id = w.id) AS member_count,
+                   (SELECT count(*) FROM projects p WHERE p.workspace_id = w.id) AS project_count
+            FROM workspaces w
+            JOIN workspace_members wm ON wm.workspace_id = w.id
+            WHERE wm.user_id = %(user_id)s AND wm.status = 'active'
+
+            ORDER BY created_at DESC
             """,
-            (owner_user_id,),
+            {"user_id": user_id},
         )
         return cur.fetchall()
 
@@ -269,19 +282,34 @@ def delete_workspace(workspace_id: int) -> bool:
 
 
 # ---------- workspace_members ----------
+#
+# Phase 2 (sql/006_workspace_member_access.sql): a member row is now a
+# real second login identity, not just a notify-list entry — user_id is
+# resolved (via upsert_user_login) the moment the admin adds them,
+# status is 'active'/'disabled' (the admin's toggle, without removing
+# the row), and access_code_hash is the hash of their persistent login
+# credential (see airi/auth.py's generate_access_code/verify_access_code
+# and POST /auth/member-login in api.py). The hash is deliberately left
+# out of _MEMBER_FIELDS — only the two functions below that actually
+# need it (login verification, and overwriting it on regenerate) touch
+# that column at all.
 
-def add_workspace_member(workspace_id: int, email: str) -> Optional[dict]:
-    """Returns the new member row, or None if that email is already a
-    member of this workspace (caller turns that into a 409, not a 500)."""
+_MEMBER_FIELDS = "id, workspace_id, email, user_id, status, added_at"
+
+
+def add_workspace_member(workspace_id: int, email: str, user_id: int, access_code_hash: str) -> Optional[dict]:
+    """Returns the new member row (never including the code hash), or
+    None if that email is already a member of this workspace (caller
+    turns that into a 409, not a 500)."""
     with _cursor() as cur:
         cur.execute(
-            """
-            INSERT INTO workspace_members (workspace_id, email)
-            VALUES (%s, lower(%s))
+            f"""
+            INSERT INTO workspace_members (workspace_id, email, user_id, status, access_code_hash)
+            VALUES (%s, lower(%s), %s, 'active', %s)
             ON CONFLICT (workspace_id, lower(email)) DO NOTHING
-            RETURNING id, workspace_id, email, added_at
+            RETURNING {_MEMBER_FIELDS}
             """,
-            (workspace_id, email),
+            (workspace_id, email, user_id, access_code_hash),
         )
         return cur.fetchone()
 
@@ -289,7 +317,7 @@ def add_workspace_member(workspace_id: int, email: str) -> Optional[dict]:
 def list_workspace_members(workspace_id: int) -> List[dict]:
     with _cursor() as cur:
         cur.execute(
-            "SELECT id, workspace_id, email, added_at FROM workspace_members WHERE workspace_id = %s ORDER BY added_at ASC",
+            f"SELECT {_MEMBER_FIELDS} FROM workspace_members WHERE workspace_id = %s ORDER BY added_at ASC",
             (workspace_id,),
         )
         return cur.fetchall()
@@ -298,7 +326,7 @@ def list_workspace_members(workspace_id: int) -> List[dict]:
 def get_workspace_member(workspace_id: int, member_id: int) -> Optional[dict]:
     with _cursor() as cur:
         cur.execute(
-            "SELECT id, workspace_id, email, added_at FROM workspace_members WHERE workspace_id = %s AND id = %s",
+            f"SELECT {_MEMBER_FIELDS} FROM workspace_members WHERE workspace_id = %s AND id = %s",
             (workspace_id, member_id),
         )
         return cur.fetchone()
@@ -309,10 +337,77 @@ def remove_workspace_member(workspace_id: int, member_id: int) -> Optional[dict]
     or None if no such member existed."""
     with _cursor() as cur:
         cur.execute(
-            "DELETE FROM workspace_members WHERE workspace_id = %s AND id = %s RETURNING id, workspace_id, email, added_at",
+            f"DELETE FROM workspace_members WHERE workspace_id = %s AND id = %s RETURNING {_MEMBER_FIELDS}",
             (workspace_id, member_id),
         )
         return cur.fetchone()
+
+
+def set_workspace_member_status(workspace_id: int, member_id: int, status: str) -> Optional[dict]:
+    """The admin's disable/enable toggle. A real relationship stays on
+    the row (unlike remove_workspace_member's hard delete), so
+    re-enabling doesn't require re-adding the member or issuing a new
+    code."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE workspace_members SET status = %s
+            WHERE workspace_id = %s AND id = %s
+            RETURNING {_MEMBER_FIELDS}
+            """,
+            (status, workspace_id, member_id),
+        )
+        return cur.fetchone()
+
+
+def regenerate_workspace_member_code(workspace_id: int, member_id: int, access_code_hash: str) -> Optional[dict]:
+    """Overwrites a member's access-code hash — used when the admin
+    regenerates a lost/compromised code. Since only the hash is ever
+    stored, there's no way to recover the old code; this replaces it
+    outright."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE workspace_members SET access_code_hash = %s
+            WHERE workspace_id = %s AND id = %s
+            RETURNING {_MEMBER_FIELDS}
+            """,
+            (access_code_hash, workspace_id, member_id),
+        )
+        return cur.fetchone()
+
+
+def get_membership(workspace_id: int, user_id: int) -> Optional[dict]:
+    """The requesting user's own membership row in this workspace, if
+    any — used by the permission-check helpers in api.py to decide
+    whether a non-owner caller has *any* relationship to the workspace
+    (None -> 404) and, if so, whether it's currently active (status !=
+    'active' -> 403)."""
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT {_MEMBER_FIELDS} FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
+            (workspace_id, user_id),
+        )
+        return cur.fetchone()
+
+
+def get_active_memberships_by_email(email: str) -> List[dict]:
+    """Every active membership for this email, *including* the access
+    code hash — used only by the member-login flow (POST
+    /auth/member-login in api.py) to check a submitted code against each
+    workspace this email was added to. A member added to several
+    workspaces has a separate code per workspace, so login checks all of
+    them."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, workspace_id, email, user_id, status, access_code_hash, added_at
+            FROM workspace_members
+            WHERE lower(email) = lower(%s) AND status = 'active' AND access_code_hash IS NOT NULL
+            """,
+            (email,),
+        )
+        return cur.fetchall()
 
 
 # ---------- projects ----------

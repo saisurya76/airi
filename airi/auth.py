@@ -32,6 +32,14 @@ SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # signed-in sessions last 30 days
 ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60  # admin tokens are short-lived — re-enter the password twice a day
 JWT_ALGORITHM = "HS256"
 
+# A team member's access code (see generate_access_code below) is a
+# different kind of credential from the two above: it isn't short-lived
+# or single-use, it's what the member signs in with indefinitely until
+# their workspace admin regenerates or disables it — so it needs more
+# entropy than a 6-digit OTP or a 4-digit app key.
+ACCESS_CODE_LENGTH = 10
+_ACCESS_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L — easy to read/type when an admin relays it verbally or over chat
+
 
 class AuthError(ValueError):
     """Raised for any user-facing auth failure — callers turn this into a 400/401."""
@@ -67,6 +75,32 @@ def verify_code(email: str, code: str, pepper: str, expected_hash: str) -> bool:
     if not code or not code.isdigit() or len(code) != CODE_LENGTH:
         return False
     return secrets.compare_digest(hash_code(email, code, pepper), expected_hash)
+
+
+def generate_access_code() -> str:
+    """A team member's ongoing login credential (set by their workspace
+    admin — see POST /workspaces/{id}/members in api.py). Restricted to
+    an unambiguous alphabet (no 0/O/1/I/L) since an admin typically reads
+    this out loud or pastes it into a chat message for the member,
+    rather than it being auto-emailed with the code embedded."""
+    return "".join(secrets.choice(_ACCESS_CODE_ALPHABET) for _ in range(ACCESS_CODE_LENGTH))
+
+
+def normalize_access_code(code: str) -> str:
+    """Access codes are case-insensitive and tolerate stray spaces or
+    dashes a member might introduce copying one out of a chat message."""
+    return (code or "").strip().upper().replace(" ", "").replace("-", "")
+
+
+def verify_access_code(email: str, code: str, pepper: str, expected_hash: str) -> bool:
+    """Constant-time comparison against a stored access-code hash. Reuses
+    hash_code's email+pepper binding (same reasoning as verify_code) but,
+    unlike verify_code, doesn't assume a fixed-length digit-only code —
+    an access code is alphanumeric."""
+    normalized = normalize_access_code(code)
+    if not normalized:
+        return False
+    return secrets.compare_digest(hash_code(email, normalized, pepper), expected_hash)
 
 
 def create_session_token(email: str, secret: str) -> str:

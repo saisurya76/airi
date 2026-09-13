@@ -35,9 +35,11 @@ from airi.auth import (
     create_admin_token,
     create_session_token,
     extract_bearer_token,
+    generate_access_code,
     generate_code,
     hash_code,
     normalize_email,
+    verify_access_code,
     verify_admin_token,
     verify_code,
     verify_session_token,
@@ -115,28 +117,71 @@ def _require_user_id(authorization: Optional[str]) -> int:
     return user_id
 
 
-def _get_owned_workspace(workspace_id: int, user_id: int) -> dict:
-    """404 (not 403) whether the workspace doesn't exist or just isn't
-    this user's — never confirms another workspace id exists."""
+def _get_accessible_workspace(workspace_id: int, user_id: int) -> Tuple[dict, str]:
+    """404 whether the workspace doesn't exist or the caller has no
+    relationship to it at all (not the owner, no membership row) — never
+    confirms another workspace id exists to someone with no relationship
+    to it. 403 if the caller has a *disabled* membership — a real
+    relationship, just not an active one right now, so it's fine to say
+    so rather than pretending the workspace doesn't exist.
+
+    Returns (workspace, role): role is "admin" for the creator, "member"
+    for an active team member (see sql/006_workspace_member_access.sql)."""
     try:
         workspace = db.get_workspace(workspace_id)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    if workspace is None or workspace["owner_user_id"] != user_id:
+    if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found.")
+    if workspace["owner_user_id"] == user_id:
+        return workspace, "admin"
+    try:
+        membership = db.get_membership(workspace_id, user_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    if membership["status"] != "active":
+        raise HTTPException(status_code=403, detail="Your access to this workspace has been disabled by its admin.")
+    return workspace, "member"
+
+
+def _require_workspace_admin(workspace_id: int, user_id: int) -> dict:
+    """Gate for admin-only workspace actions: update basic details,
+    delete the workspace, create/delete a project, and all membership
+    management (add/remove/disable/enable/regenerate-code). An active
+    team member reaches here (403), not just an outsider (404) — see
+    _get_accessible_workspace.
+
+    Distinct on purpose from _require_admin (above), which gates the
+    site's password-protected founder admin page — an unrelated concept
+    that happens to share the word "admin"; never use one where the
+    other belongs."""
+    workspace, role = _get_accessible_workspace(workspace_id, user_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the workspace admin can do that.")
     return workspace
 
 
-def _get_owned_project(project_id: int, user_id: int) -> Tuple[dict, dict]:
-    """Returns (project, workspace) after confirming the project's parent
-    workspace belongs to this user. Same 404-not-403 reasoning."""
+def _get_accessible_project(project_id: int, user_id: int) -> Tuple[dict, dict, str]:
+    """Returns (project, workspace, role) after confirming the caller can
+    reach the project's parent workspace — same 404/403 reasoning as
+    _get_accessible_workspace."""
     try:
         proj = db.get_project(project_id)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     if proj is None:
         raise HTTPException(status_code=404, detail="Project not found.")
-    workspace = _get_owned_workspace(proj["workspace_id"], user_id)
+    workspace, role = _get_accessible_workspace(proj["workspace_id"], user_id)
+    return proj, workspace, role
+
+
+def _require_project_admin(project_id: int, user_id: int) -> Tuple[dict, dict]:
+    """Gate for admin-only project actions: update basic details, delete."""
+    proj, workspace, role = _get_accessible_project(project_id, user_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the workspace admin can do that.")
     return proj, workspace
 
 
@@ -244,6 +289,16 @@ class RequestCodeBody(BaseModel):
 
 
 class VerifyCodeBody(BaseModel):
+    email: str
+    code: str
+
+
+class MemberLoginBody(BaseModel):
+    """A team member's own sign-in — see POST /auth/member-login. Distinct
+    from VerifyCodeBody: that's step 2 of the owner's one-time-emailed-OTP
+    flow, this is a member's persistent access code, issued once by their
+    workspace admin and reused every time they sign in."""
+
     email: str
     code: str
 
@@ -512,6 +567,44 @@ def verify_code_endpoint(body: VerifyCodeBody):
     return {"token": create_session_token(email, secret), "email": email}
 
 
+@app.post("/auth/member-login")
+def member_login(body: MemberLoginBody):
+    """Sign-in for a team member, using the persistent access code their
+    workspace admin gave them when adding them (see POST
+    /workspaces/{id}/members) — a separate credential and a separate
+    endpoint from the owner's email+OTP flow above, but it produces an
+    identical, fully-capable session token via the same
+    create_session_token: there's no separate "session type" to track,
+    because every workspace/project endpoint evaluates permission
+    per-request from the workspace_members row for this session's
+    resolved user_id (see _get_accessible_workspace), independent of
+    which login path produced the session.
+
+    A member can be added to more than one workspace, each with its own
+    code, so this checks the submitted code against every active
+    membership for the email rather than assuming a single one."""
+    secret = _get_auth_secret()
+    try:
+        email = normalize_email(body.email)
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        memberships = db.get_active_memberships_by_email(email)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    matched = any(
+        verify_access_code(email, body.code, secret, m["access_code_hash"])
+        for m in memberships
+    )
+    if not matched:
+        raise HTTPException(status_code=400, detail="Incorrect email or access code.")
+
+    db.upsert_user_login(email)
+    return {"token": create_session_token(email, secret), "email": email}
+
+
 @app.get("/auth/me")
 def auth_me(authorization: Optional[str] = Header(default=None)):
     """Lets the frontend check whether a stored token is still valid on
@@ -566,13 +659,16 @@ def set_app_key(body: AppKeyBody, authorization: Optional[str] = Header(default=
     return {"has_app_key": True}
 
 
-def _workspace_detail(workspace: dict) -> dict:
-    """A workspace plus its members and projects — everything requirement
-    #10 ("when he logs in all the above details must be shown back")
-    needs for one workspace in one call."""
+def _workspace_detail(workspace: dict, role: str) -> dict:
+    """A workspace plus its members, projects, and the caller's own role
+    ("admin" or "member") — everything requirement #10 ("when he logs in
+    all the above details must be shown back") needs for one workspace in
+    one call, plus what the frontend needs to know which controls to
+    show a non-admin team member."""
     workspace_id = workspace["id"]
     return {
         **workspace,
+        "role": role,
         "members": db.list_workspace_members(workspace_id),
         "projects": db.list_projects(workspace_id),
     }
@@ -580,8 +676,10 @@ def _workspace_detail(workspace: dict) -> dict:
 
 @app.get("/workspaces")
 def list_workspaces(authorization: Optional[str] = Header(default=None)):
-    """Every workspace this signed-in user owns, most recent first, with
-    member/project counts — the workspace-list view."""
+    """Every workspace this signed-in user can reach — the ones they own
+    plus the ones where they're an active team member — most recent
+    first, each annotated with the caller's role and member/project
+    counts. The workspace-list view."""
     user_id = _require_user_id(authorization)
     try:
         return db.list_workspaces(user_id)
@@ -600,26 +698,29 @@ def create_workspace(body: WorkspaceBody, authorization: Optional[str] = Header(
         workspace = db.create_workspace(user_id, title, target, description)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    return _workspace_detail(workspace)
+    return _workspace_detail(workspace, "admin")  # whoever creates a workspace is its admin
 
 
 @app.get("/workspaces/{workspace_id}")
 def get_workspace(workspace_id: int, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    workspace = _get_owned_workspace(workspace_id, user_id)
-    return _workspace_detail(workspace)
+    workspace, role = _get_accessible_workspace(workspace_id, user_id)
+    return _workspace_detail(workspace, role)
 
 
 @app.put("/workspaces/{workspace_id}")
 def update_workspace(workspace_id: int, body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
+    """Editing a workspace's basic details (title/target/description) is
+    admin-only — a team member can work inside a workspace but can't
+    rename it or change what it's for."""
     user_id = _require_user_id(authorization)
-    _get_owned_workspace(workspace_id, user_id)
+    _require_workspace_admin(workspace_id, user_id)
     try:
         title, target, description = ws.validate_workspace_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     workspace = db.update_workspace(workspace_id, title, target, description)
-    return _workspace_detail(workspace)
+    return _workspace_detail(workspace, "admin")
 
 
 @app.delete("/workspaces/{workspace_id}")
@@ -627,9 +728,10 @@ def delete_workspace(workspace_id: int, body: AppKeyConfirmBody, authorization: 
     """Deleting a workspace cascades to its members and projects (see
     sql/003_workspaces_schema.sql's ON DELETE CASCADE) — the app-key
     confirmation exists specifically because this one action can take
-    an entire workspace's projects with it."""
+    an entire workspace's projects with it. Admin-only: a team member
+    can never delete the workspace they were added to."""
     user_id = _require_user_id(authorization)
-    _get_owned_workspace(workspace_id, user_id)
+    _require_workspace_admin(workspace_id, user_id)
     _require_app_key_confirmed(user_id, body.app_key)
     db.delete_workspace(workspace_id)
     return {"deleted": True}
@@ -637,19 +739,30 @@ def delete_workspace(workspace_id: int, body: AppKeyConfirmBody, authorization: 
 
 @app.post("/workspaces/{workspace_id}/members")
 def add_workspace_member(workspace_id: int, body: WorkspaceMemberBody, authorization: Optional[str] = Header(default=None)):
-    """Adds a team member by email and sends them a standard notification
-    (best-effort — see the try/except below: a Resend hiccup shouldn't
-    block adding the member, since the membership itself is what matters
-    and the notification is a courtesy, not a confirmation the member
-    must act on)."""
+    """Admin-only: adds a team member by email, generates their access
+    code (their ongoing login credential — see POST /auth/member-login),
+    stores only its hash, and resolves/creates the member's own `users`
+    row right away (via upsert_user_login) so permission checks have a
+    user_id to key off of even before the member ever signs in.
+
+    The plaintext code is returned exactly once, in this response — it
+    is never stored, logged, or emailed with the code embedded (the
+    notification below is a courtesy that a member was added, not a
+    credential delivery — the admin relays the code out-of-band)."""
     user_id = _require_user_id(authorization)
-    workspace = _get_owned_workspace(workspace_id, user_id)
+    workspace = _require_workspace_admin(workspace_id, user_id)
     try:
         email = ws.normalize_member_email(body.email)
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    member = db.add_workspace_member(workspace_id, email)
+    pepper = _get_auth_secret()
+    try:
+        member_user_id = db.upsert_user_login(email)
+        code = generate_access_code()
+        member = db.add_workspace_member(workspace_id, email, member_user_id, hash_code(email, code, pepper))
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     if member is None:
         raise HTTPException(status_code=409, detail=f"{email} is already a member of this workspace.")
 
@@ -658,13 +771,15 @@ def add_workspace_member(workspace_id: int, body: WorkspaceMemberBody, authoriza
     except EmailSendError:
         pass  # membership is saved either way; the email is a courtesy
 
-    return member
+    return {**member, "access_code": code}
 
 
 @app.delete("/workspaces/{workspace_id}/members/{member_id}")
 def remove_workspace_member(workspace_id: int, member_id: int, authorization: Optional[str] = Header(default=None)):
+    """Admin-only. A hard delete — see set_workspace_member_status's
+    disable/enable endpoints below for the reversible alternative."""
     user_id = _require_user_id(authorization)
-    workspace = _get_owned_workspace(workspace_id, user_id)
+    workspace = _require_workspace_admin(workspace_id, user_id)
     member = db.remove_workspace_member(workspace_id, member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="Team member not found.")
@@ -677,6 +792,53 @@ def remove_workspace_member(workspace_id: int, member_id: int, authorization: Op
     return {"deleted": True}
 
 
+@app.post("/workspaces/{workspace_id}/members/{member_id}/disable")
+def disable_workspace_member(workspace_id: int, member_id: int, authorization: Optional[str] = Header(default=None)):
+    """Admin-only. Revokes the member's access without removing them or
+    their history — distinct from remove_workspace_member's hard delete.
+    A disabled member's existing session tokens (if any) stay
+    cryptographically valid until they expire, but every workspace/
+    project endpoint re-checks membership status on every request (see
+    _get_accessible_workspace), so a disabled member is locked out
+    immediately regardless of token expiry."""
+    user_id = _require_user_id(authorization)
+    _require_workspace_admin(workspace_id, user_id)
+    member = db.set_workspace_member_status(workspace_id, member_id, "disabled")
+    if member is None:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    return member
+
+
+@app.post("/workspaces/{workspace_id}/members/{member_id}/enable")
+def enable_workspace_member(workspace_id: int, member_id: int, authorization: Optional[str] = Header(default=None)):
+    """Admin-only. Restores a previously disabled member's access using
+    their existing code — no need to re-add them or issue a new one."""
+    user_id = _require_user_id(authorization)
+    _require_workspace_admin(workspace_id, user_id)
+    member = db.set_workspace_member_status(workspace_id, member_id, "active")
+    if member is None:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    return member
+
+
+@app.post("/workspaces/{workspace_id}/members/{member_id}/regenerate-code")
+def regenerate_workspace_member_code(workspace_id: int, member_id: int, authorization: Optional[str] = Header(default=None)):
+    """Admin-only. Issues a brand-new access code for a member (e.g. a
+    lost or compromised one) and invalidates the old one immediately —
+    since only the hash was ever stored, there's no way to recover the
+    old code to invalidate it any other way. Returned exactly once, same
+    as at member-creation time."""
+    user_id = _require_user_id(authorization)
+    _require_workspace_admin(workspace_id, user_id)
+    member = db.get_workspace_member(workspace_id, member_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    pepper = _get_auth_secret()
+    code = generate_access_code()
+    updated = db.regenerate_workspace_member_code(workspace_id, member_id, hash_code(member["email"], code, pepper))
+    return {**updated, "access_code": code}
+
+
 @app.get("/projects/tech-stack-categories")
 def tech_stack_categories():
     """The tech-stack form's category list (label + required/optional),
@@ -687,37 +849,43 @@ def tech_stack_categories():
 
 @app.post("/workspaces/{workspace_id}/projects")
 def create_project(workspace_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only: creating a project is a workspace-identity operation,
+    same bucket as creating/deleting the workspace itself — a team
+    member works inside existing projects but can't add new ones."""
     user_id = _require_user_id(authorization)
-    _get_owned_workspace(workspace_id, user_id)
+    _require_workspace_admin(workspace_id, user_id)
     try:
         title, description, tech_stack = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return db.create_project(workspace_id, title, description, tech_stack)
+    return {**db.create_project(workspace_id, title, description, tech_stack), "role": "admin"}
 
 
 @app.get("/projects/{project_id}")
 def get_project(project_id: int, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    project_row, _workspace = _get_owned_project(project_id, user_id)
-    return project_row
+    project_row, _workspace, role = _get_accessible_project(project_id, user_id)
+    return {**project_row, "role": role}
 
 
 @app.put("/projects/{project_id}")
 def update_project(project_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only: a team member can't rename a project or change its
+    tech stack, only work inside it (run tools, add notes)."""
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _require_project_admin(project_id, user_id)
     try:
         title, description, tech_stack = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return db.update_project(project_id, title, description, tech_stack)
+    return {**db.update_project(project_id, title, description, tech_stack), "role": "admin"}
 
 
 @app.delete("/projects/{project_id}")
 def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only, same reasoning as delete_workspace."""
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _require_project_admin(project_id, user_id)
     _require_app_key_confirmed(user_id, body.app_key)
     db.delete_project(project_id)
     return {"deleted": True}
@@ -738,7 +906,7 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 @app.post("/projects/{project_id}/tools/analyze/runs")
 def create_analyze_run(project_id: int, body: AnalyzeRunBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     try:
         label = tool_runs.validate_label(body.label)
     except tool_runs.ToolRunError as exc:
@@ -750,7 +918,7 @@ def create_analyze_run(project_id: int, body: AnalyzeRunBody, authorization: Opt
 @app.post("/projects/{project_id}/tools/exact/runs")
 def create_exact_run(project_id: int, body: ExactRunBody, authorization: Optional[str] = Header(default=None)):
     email, user_id = _require_session_email_and_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     _check_exact_rate_limit(email)
     try:
         label = tool_runs.validate_label(body.label)
@@ -766,7 +934,7 @@ def create_exact_run(project_id: int, body: ExactRunBody, authorization: Optiona
 @app.post("/projects/{project_id}/tools/project/runs")
 def create_project_run(project_id: int, body: ProjectRunBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     try:
         label = tool_runs.validate_label(body.label)
     except tool_runs.ToolRunError as exc:
@@ -778,7 +946,7 @@ def create_project_run(project_id: int, body: ProjectRunBody, authorization: Opt
 @app.post("/projects/{project_id}/tools/report/runs")
 def create_report_run(project_id: int, body: ReportRunBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     try:
         label = tool_runs.validate_label(body.label)
     except tool_runs.ToolRunError as exc:
@@ -791,14 +959,14 @@ def create_report_run(project_id: int, body: ReportRunBody, authorization: Optio
 @app.get("/projects/{project_id}/tools/{tool}/runs")
 def list_project_tool_runs(project_id: int, tool: tool_runs.ToolName, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     return db.list_tool_runs(project_id, tool.value)
 
 
 @app.delete("/projects/{project_id}/tools/{tool}/runs/{run_id}")
 def delete_project_tool_run(project_id: int, tool: tool_runs.ToolName, run_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     run = db.get_tool_run(run_id)
     if run is None or run["project_id"] != project_id or run["tool"] != tool.value:
         raise HTTPException(status_code=404, detail="Tool run not found.")
@@ -817,7 +985,7 @@ def delete_project_tool_run(project_id: int, tool: tool_runs.ToolName, run_id: i
 @app.post("/projects/{project_id}/notes")
 def create_project_note(project_id: int, body: NoteBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     try:
         note_body = notes.validate_note_body(body.body)
     except notes.NoteError as exc:
@@ -828,14 +996,14 @@ def create_project_note(project_id: int, body: NoteBody, authorization: Optional
 @app.get("/projects/{project_id}/notes")
 def list_project_notes(project_id: int, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     return db.list_notes(project_id)
 
 
 @app.delete("/projects/{project_id}/notes/{note_id}")
 def delete_project_note(project_id: int, note_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
-    _get_owned_project(project_id, user_id)
+    _get_accessible_project(project_id, user_id)
     note = db.get_note(note_id)
     if note is None or note["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Note not found.")
@@ -860,7 +1028,7 @@ def delete_project_note(project_id: int, note_id: int, body: AppKeyConfirmBody, 
 
 
 def _build_consolidated_report(project_id: int, user_id: int, email: str) -> Dict[str, Any]:
-    proj, _workspace = _get_owned_project(project_id, user_id)
+    proj, _workspace, _role = _get_accessible_project(project_id, user_id)
     runs_by_tool = {t.value: db.list_tool_runs(project_id, t.value) for t in tool_runs.ToolName}
     all_runs = [r for runs in runs_by_tool.values() for r in runs]
     totals = consolidated_report.aggregate_totals(all_runs)
@@ -919,7 +1087,7 @@ def get_consolidated_report_pdf(project_id: int, authorization: Optional[str] = 
 @app.get("/projects/{project_id}/tools/{tool}/runs/{run_id}/pdf")
 def get_tool_run_pdf(project_id: int, tool: tool_runs.ToolName, run_id: int, authorization: Optional[str] = Header(default=None)):
     email, user_id = _require_session_email_and_user_id(authorization)
-    proj, _workspace = _get_owned_project(project_id, user_id)
+    proj, _workspace, _role = _get_accessible_project(project_id, user_id)
     run = db.get_tool_run(run_id)
     if run is None or run["project_id"] != project_id or run["tool"] != tool.value:
         raise HTTPException(status_code=404, detail="Tool run not found.")
@@ -952,7 +1120,7 @@ def get_tool_run_pdf(project_id: int, tool: tool_runs.ToolName, run_id: int, aut
 
 
 def _build_workspace_comparison(workspace_id: int, user_id: int, email: str) -> Dict[str, Any]:
-    workspace = _get_owned_workspace(workspace_id, user_id)
+    workspace, _role = _get_accessible_workspace(workspace_id, user_id)
     projects = db.list_projects(workspace_id)
     summaries = []
     for proj in projects:

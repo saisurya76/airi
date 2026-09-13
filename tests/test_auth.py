@@ -10,12 +10,16 @@ from airi.auth import (
     generate_code,
     hash_code,
     verify_code,
+    generate_access_code,
+    normalize_access_code,
+    verify_access_code,
     create_session_token,
     verify_session_token,
     create_admin_token,
     verify_admin_token,
     extract_bearer_token,
     CODE_LENGTH,
+    ACCESS_CODE_LENGTH,
 )
 
 PEPPER = "test-pepper"
@@ -77,6 +81,65 @@ def test_verify_rejects_malformed_input():
     for bad in ["", "12345", "1234567", "abcdef", None]:
         assert verify_code("user@example.com", bad, PEPPER, h) is False
     print("OK: verify_rejects_malformed_input")
+
+
+# ---------- team-member access codes (sql/006_workspace_member_access.sql) ----------
+
+def test_generate_access_code_shape():
+    for _ in range(50):
+        code = generate_access_code()
+        assert len(code) == ACCESS_CODE_LENGTH
+        # No ambiguous characters (0/O/1/I/L) — the admin relays this by
+        # hand, so it must be easy to read/type correctly.
+        assert not (set(code) & set("01IL")), code
+        assert code == code.upper()
+    codes = {generate_access_code() for _ in range(20)}
+    assert len(codes) > 1
+    print("OK: generate_access_code_shape")
+
+
+def test_access_code_hash_and_verify_roundtrip():
+    email = "member@example.com"
+    code = generate_access_code()
+    h = hash_code(email, code, PEPPER)  # hashing reuses hash_code as-is
+    assert verify_access_code(email, code, PEPPER, h) is True
+    print("OK: access_code_hash_and_verify_roundtrip")
+
+
+def test_verify_access_code_is_case_and_whitespace_insensitive():
+    email = "member@example.com"
+    code = generate_access_code()
+    h = hash_code(email, code, PEPPER)
+    messy = f" {code.lower()[:5]}-{code.lower()[5:]} "
+    assert verify_access_code(email, messy, PEPPER, h) is True
+    print("OK: verify_access_code_is_case_and_whitespace_insensitive")
+
+
+def test_verify_access_code_rejects_wrong_code():
+    email = "member@example.com"
+    h = hash_code(email, generate_access_code(), PEPPER)
+    assert verify_access_code(email, "WRONGCODE1", PEPPER, h) is False
+    print("OK: verify_access_code_rejects_wrong_code")
+
+
+def test_verify_access_code_rejects_cross_email_replay():
+    code = generate_access_code()
+    h = hash_code("victim@example.com", code, PEPPER)
+    assert verify_access_code("attacker@example.com", code, PEPPER, h) is False
+    print("OK: verify_access_code_rejects_cross_email_replay")
+
+
+def test_verify_access_code_rejects_malformed_input():
+    h = hash_code("member@example.com", generate_access_code(), PEPPER)
+    for bad in ["", "   ", None]:
+        assert verify_access_code("member@example.com", bad, PEPPER, h) is False
+    print("OK: verify_access_code_rejects_malformed_input")
+
+
+def test_normalize_access_code_strips_case_space_and_dashes():
+    assert normalize_access_code(" ab12-cd34-ef ") == "AB12CD34EF"
+    assert normalize_access_code(None) == ""
+    print("OK: normalize_access_code_strips_case_space_and_dashes")
 
 
 def test_session_token_roundtrip():

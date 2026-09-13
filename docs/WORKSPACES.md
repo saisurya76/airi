@@ -1,4 +1,4 @@
-# Workspaces & Projects (Phases 1–4)
+# Workspaces & Projects (Phases 1–5)
 
 `frontend/workspaces.html` lets a signed-in user organize their work
 into **workspaces** (a team/initiative) containing **projects** (a
@@ -7,15 +7,19 @@ one-off calculator every time. This is a **multi-phase plan**: Phase 1
 shipped the data model, CRUD, and full restore-on-login; Phase 2 made
 AIRI's tools runnable and saved inside a project; Phase 3 added a
 Dashboard tab, a Notes tab, and an Actions tab with a downloadable
-consolidated PDF report; Phase 4 (this delivery) adds a cross-project
-comparison tab with its own PDF report, plus per-saved-run PDF
-downloads. See "What's next" at the bottom for what's still deferred
-and why.
+consolidated PDF report; Phase 4 added a cross-project comparison tab
+with its own PDF report, plus per-saved-run PDF downloads; Phase 5
+(this delivery — see "Team-member access" below) gives a workspace's
+team members their own real, role-scoped access instead of just an
+email notification. No further phases are planned as of this delivery.
 
-Like Exact mode, this entire feature requires a signed-in session
-(email + OTP — see [docs/EXACT_MODE.md](EXACT_MODE.md)). It doesn't
-touch `/analyze`, `/project`, `/report*`, which remain completely
-anonymous and stateless.
+Like Exact mode, this entire feature requires a signed-in session — a
+workspace's admin signs in with email + OTP (see
+[docs/EXACT_MODE.md](EXACT_MODE.md)), a team member with the
+workspace-scoped access code their admin gave them (`POST
+/auth/member-login` — see "Team-member access" below). Neither touches
+`/analyze`, `/project`, `/report*`, which remain completely anonymous
+and stateless.
 
 ## Data model
 
@@ -28,12 +32,11 @@ Three new tables (`sql/003_workspaces_schema.sql`), on top of the
 - **`workspaces`** — owned by exactly one user (`owner_user_id`).
   `title` (required), `target` (the high-level target of the exercise),
   `description`.
-- **`workspace_members`** — email addresses invited into a workspace.
-  Phase 1 treats this as informational: adding/removing a member sends
-  them a standard notification email, but a member doesn't get their
-  own access to the workspace yet. Real team collaboration (a member
-  signing in and seeing/editing the workspace themselves) is flagged
-  below as likely Phase 2, once this phase is confirmed working.
+- **`workspace_members`** — a workspace's team, by email. Phase 1
+  treated this as purely informational (a notification email on
+  add/remove, no real access). Phase 5 (`sql/006_workspace_member_access.sql`)
+  turned it into a real second login identity — see "Team-member
+  access" below.
 - **`projects`** — belongs to one workspace. `title`, `description`,
   and `tech_stack` (a JSON object — see below). Deleting a workspace
   cascades to its members and projects.
@@ -96,10 +99,21 @@ there automatically.
 ## API reference
 
 All endpoints below require `Authorization: Bearer <session token>`
-(from `POST /auth/verify-code`) and return `401` without one. A
-workspace/project id that exists but belongs to another user returns
-`404`, identically to one that doesn't exist at all — this deliberately
-never confirms another user's workspace/project id is valid.
+(from `POST /auth/verify-code` for a workspace's admin, or `POST
+/auth/member-login` for a team member — see "Team-member access"
+below; the two produce identical, fully-capable session tokens) and
+return `401` without one.
+
+Every endpoint checks the caller's *relationship* to the workspace/
+project, not just whether it exists:
+
+- No relationship at all (not the owner, no membership row) → `404`,
+  identically to an id that doesn't exist — never confirms another
+  workspace/project id is valid to someone with no claim on it.
+- An active team member hitting an admin-only action (see the table
+  below) → `403` — a real relationship, just not the right one for
+  that action.
+- A *disabled* member, on anything → `403` — see "Team-member access".
 
 ### Profile
 
@@ -109,38 +123,54 @@ never confirms another user's workspace/project id is valid.
 
 ### Workspaces
 
-- `GET /workspaces` — every workspace this user owns, with
-  `member_count`/`project_count`, most recent first.
+- `GET /workspaces` — every workspace this user can reach: the ones
+  they own (`role: "admin"`) plus the ones where they're an *active*
+  team member (`role: "member"`) — a disabled membership is excluded
+  entirely, not just hidden. `member_count`/`project_count` per
+  workspace, most recent first.
 - `POST /workspaces` — body `{"title", "target", "description"}`
-  (`title` required). Returns the new workspace with empty
-  `members`/`projects` arrays.
-- `GET /workspaces/{id}` — full detail: the workspace fields plus
-  `members` and `projects` arrays — everything needed to restore the
-  page on login in one call.
-- `PUT /workspaces/{id}` — same body shape as create; a full replace
-  of the three editable fields.
-- `DELETE /workspaces/{id}` — body `{"app_key": "1234"}`. Cascades to
-  members and projects. `400` if the app key is missing/wrong/unset.
+  (`title` required). Whoever creates a workspace is its admin.
+  Returns the new workspace with empty `members`/`projects` arrays and
+  `role: "admin"`.
+- `GET /workspaces/{id}` — admin or active member. Full detail: the
+  workspace fields plus `role`, `members`, and `projects` arrays —
+  everything needed to restore the page on login in one call.
+- `PUT /workspaces/{id}` — **admin-only** (`403` for a member). Same
+  body shape as create; a full replace of the three editable fields.
+- `DELETE /workspaces/{id}` — **admin-only**. Body `{"app_key":
+  "1234"}`. Cascades to members and projects. `400` if the app key is
+  missing/wrong/unset.
 
-### Team members
+### Team members — **admin-only** (see "Team-member access" below)
 
 - `POST /workspaces/{id}/members` — body `{"email": "..."}`. `409` if
-  already a member (case-insensitive). Sends `send_member_added_email`
-  (`airi/email_provider.py`) best-effort — a Resend hiccup doesn't fail
-  the request, since the membership itself is what matters.
-- `DELETE /workspaces/{id}/members/{member_id}` — sends
+  already a member (case-insensitive). Generates the member's access
+  code, stores only its hash, and returns it in the response as
+  `access_code` — **shown exactly once**, never retrievable again.
+  Sends `send_member_added_email` (`airi/email_provider.py`)
+  best-effort as a courtesy notification — it never contains the code.
+- `DELETE /workspaces/{id}/members/{member_id}` — hard delete; the
+  member's code stops working immediately. Sends
   `send_member_removed_email` the same way.
+- `POST /workspaces/{id}/members/{member_id}/disable` /
+  `.../enable` — toggles access without removing the member or their
+  history; re-enabling needs no new code.
+- `POST /workspaces/{id}/members/{member_id}/regenerate-code` — issues
+  a fresh code (returned once, as `access_code`) and immediately
+  invalidates the old one.
 
 ### Projects
 
 - `GET /projects/tech-stack-categories` — public (no auth needed): the
   category table above, as JSON.
-- `POST /workspaces/{id}/projects` — body `{"title", "description",
-  "tech_stack": {...}}`. `400` if `title` is blank or `tech_stack` is
-  missing `ai_services`/`ai_model`.
-- `GET /projects/{id}` / `PUT /projects/{id}` — same shape.
-- `DELETE /projects/{id}` — body `{"app_key": "1234"}`, same gate as
-  deleting a workspace.
+- `POST /workspaces/{id}/projects` — **admin-only**. Body `{"title",
+  "description", "tech_stack": {...}}`. `400` if `title` is blank or
+  `tech_stack` is missing `ai_services`/`ai_model`.
+- `GET /projects/{id}` — admin or active member.
+- `PUT /projects/{id}` — **admin-only** (basic details: title,
+  description, tech stack).
+- `DELETE /projects/{id}` — **admin-only**. Body `{"app_key": "1234"}`,
+  same gate as deleting a workspace.
 
 ## Tool runs (Phase 2): AIRI's tools, inside a project
 
@@ -148,6 +178,11 @@ Each of AIRI's four existing tools is now runnable *and saved* inside a
 project, in a tab of its own on `frontend/workspaces.html`: **Standard**
 (`/analyze`), **Exact** (`/analyze/exact`), **Traffic** (`/project`,
 volume projection), and **Load Test** (`/report`, load-test reporting).
+Every one of these tool-run endpoints, plus notes, the dashboard, and
+both report/comparison endpoints below, is **admin-or-active-member** —
+a team member has full working access to everything inside a project
+they can reach; only workspace/project identity and membership
+management (above) are admin-only. See "Team-member access" below.
 
 Every run is stored as one row in `project_tool_runs`
 (`sql/004_project_tool_runs.sql`): which tool, an optional user-chosen
@@ -237,16 +272,14 @@ this one aggregation — `api.py`'s `_build_consolidated_report` — so
 they can never silently disagree. This is the same reasoning as
 `report.py`/`report_render.py` for the standalone Load-test report.
 
-**"Signed by the user who initiates/creates the project"**: today, the
-only user who can ever reach a project *is* the workspace owner — real
-team collaboration (a member getting their own access, not just an
-email notification) hasn't shipped yet — so the signed-in session's own
-email is, by construction, the project's creator. The PDF's "Prepared
-by" line uses that email directly; there's no separate name field to
-pull from (the `users` table only ever stores an email — see
-`sql/001_auth_schema.sql`). This will need a real per-project creator
-lookup once team collaboration ships and a project can be opened by
-someone other than the person who created it.
+**"Prepared by"**: this is the signed-in session's own email — the
+person who happened to generate this particular report, admin or
+active team member alike — not the project's original creator. There's
+still no separate name field to pull from (the `users` table only ever
+stores an email — see `sql/001_auth_schema.sql`), and no per-project
+"created by" is tracked, so a consolidated/comparison report always
+credits whoever pulled it up, which may differ from run to run once a
+workspace has more than one person working in it.
 
 One rough edge, worth calling out: the consolidated totals sum cost
 across all four tools even though a Load-test report run is *itself*
@@ -307,10 +340,9 @@ Phase 3's consolidated report — they can never silently disagree.
 **"Workspace-level reporting"**, from the original plan, is this
 comparison tab plus its downloadable PDF: a workspace's report *is*
 its projects compared side by side. The comparison PDF's "Prepared by"
-line uses the signed-in session's own email, for the same reason as
-the consolidated report (see above) — real team collaboration hasn't
-shipped, so the workspace owner is, by construction, the only person
-who can ever generate it.
+line uses the signed-in session's own email — same reasoning as the
+consolidated report (see above): admin or active team member alike,
+whoever generated this particular report.
 
 A single-project workspace still answers `GET
 .../comparison` successfully (a degenerate `project_count: 1`
@@ -339,21 +371,102 @@ match the run's actual tool (guards against a stale/mismatched link).
 | `GET /workspaces/{id}/comparison` | Cross-project comparison as JSON: `workspace`, `prepared_by`, `generated_at`, `workspace_totals`, `projects` (each project's totals + by-tool breakdown, ranked most-expensive-first). |
 | `GET /workspaces/{id}/comparison.pdf` | The same data, rendered to a downloadable PDF. |
 
-## What's next (later phases — not in this delivery)
+## Team-member access (Phase 5)
 
-Per the plan agreed before building this: Phase 1 shipped the data
-model, CRUD, and restore-on-login; Phase 2 made AIRI's tools runnable
-and saved inside a project; Phase 3 added the Dashboard, Notes, and
-Actions tabs; Phase 4 (above) added the cross-project comparison tab,
-its PDF report, and per-run PDF downloads. Still to come:
+Requirements, as given: whoever creates a workspace is its admin; a
+team member gets full working access to a workspace's projects (run
+every tool, save results, add/delete their own notes and tool runs)
+but can never create or delete a workspace or project, edit either's
+basic details, or manage membership; adding a member gives them an
+admin-issued code to sign in and use AIRI/generate reports with; and
+the admin can disable a member's access. `sql/006_workspace_member_access.sql`
+extends `workspace_members` with `user_id`, `status`
+(`'active'`/`'disabled'`), and `access_code_hash` to support this.
 
-1. **Real team collaboration** — a member actually signing in and
-   seeing the workspace themselves (rather than just being notified by
-   email when added or removed) remains an open design question for a
-   later phase. This is also what the "prepared by" simplification
-   used throughout the consolidated and comparison reports (see above)
-   is waiting on: today it's always the workspace owner's own email,
-   because real team collaboration hasn't shipped and no one else can
-   reach a project or workspace yet.
+### Roles
 
-No other items from the original 4-phase plan remain outstanding.
+Two roles, both derived per-request, never stored as a separate
+"permissions" concept:
+
+- **admin** — the workspace's `owner_user_id`. Exactly one per
+  workspace, fixed at creation; ownership never transfers.
+- **member** — a row in `workspace_members` for this user, with
+  `status = 'active'`. A `'disabled'` row is a real relationship (so it
+  reads as `403`, not `404`) that just doesn't grant access right now.
+
+`api.py`'s `_get_accessible_workspace`/`_get_accessible_project` return
+`(resource, role)` for every read; `_require_workspace_admin`/
+`_require_project_admin` additionally 403 a non-admin caller, for the
+admin-only actions listed in the API reference above. This is
+deliberately a different helper from `_require_admin`, which gates the
+site's own password-protected founder admin page — an unrelated
+concept that happens to share the word "admin".
+
+### The access code: a member's ongoing login, not a one-time invite
+
+When an admin adds a member (`POST /workspaces/{id}/members`), the
+backend:
+
+1. Generates a random code (`airi.auth.generate_access_code` —
+   10 characters, from an alphabet with no `0`/`O`/`1`/`I`/`L`, since an
+   admin typically reads or pastes this to the member by hand rather
+   than it being auto-emailed).
+2. Resolves or creates the member's own `users` row immediately
+   (`db.upsert_user_login`) — so there's a `user_id` to key permission
+   checks on even before the member ever signs in.
+3. Stores only the code's hash (`airi.auth.hash_code`, same
+   email+pepper binding as the OTP/app-key hashes elsewhere in this
+   codebase) alongside the new membership row.
+4. Returns the **plaintext code exactly once**, as `access_code` in the
+   response — never stored, logged, or included in the notification
+   email. It is the admin's job to relay it to the member out of band.
+
+The member then signs in with `POST /auth/member-login` (body
+`{"email", "code"}`), which checks the code against every *active*
+membership for that email (a member can belong to more than one
+workspace, each with its own code) and, on a match, issues a normal
+session token via the same `create_session_token` the OTP flow uses.
+**There is no separate "session type"** — a member-login session is
+byte-for-byte the same kind of JWT an OTP sign-in produces; every
+workspace/project endpoint evaluates permission per-request from the
+caller's resolved `user_id`, independent of which flow produced the
+session. This was a deliberate choice over a one-time invite followed
+by normal OTP sign-in: the code *is* the member's ongoing credential,
+reusable indefinitely until the admin disables it or regenerates it.
+
+`POST /workspaces/{id}/members/{member_id}/regenerate-code` replaces a
+lost or compromised code the same way — a fresh code, returned once,
+with the old one invalidated immediately (there's no way to recover
+the old code to invalidate it any other way, since only its hash was
+ever stored).
+
+### Disable / enable: revocable without losing history
+
+`POST /workspaces/{id}/members/{member_id}/disable` flips `status` to
+`'disabled'` without touching the membership row otherwise — the
+member's saved tool runs, notes, and history all stay exactly as they
+are, and `.../enable` restores access with the *same* code (no
+re-invite needed). Because every endpoint re-checks `status` on every
+request, a disabled member is locked out immediately — their session
+token is still cryptographically valid, but `GET /workspaces` silently
+excludes the workspace from their list, and any direct request against
+it 403s. Removing a member (`DELETE .../members/{member_id}`) is the
+separate, irreversible option, for when the relationship itself is
+over rather than just paused.
+
+### API reference (Phase 5)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/member-login` | Body `{"email", "code"}`. `400` on a wrong email/code pair (never distinguishes which). Returns `{"token", "email"}`, same shape as `POST /auth/verify-code`. |
+| `POST /workspaces/{id}/members/{member_id}/disable` | Admin-only. Revokes access, keeps history. |
+| `POST /workspaces/{id}/members/{member_id}/enable` | Admin-only. Restores access with the existing code. |
+| `POST /workspaces/{id}/members/{member_id}/regenerate-code` | Admin-only. New code (returned once as `access_code`), old one invalidated. |
+
+(`POST`/`DELETE /workspaces/{id}/members` are documented under "Team
+members" above — Phase 5 changed their behavior, not their shape.)
+
+## What's next
+
+No items from the original plan remain outstanding as of this
+delivery.
