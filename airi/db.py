@@ -16,11 +16,11 @@ zero DB configuration, exactly as before. Only the new /auth/* and
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.pool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
@@ -169,3 +169,199 @@ def upsert_user_login(email: str) -> int:
             (email,),
         )
         return cur.fetchone()["id"]
+
+
+def get_user_id_by_email(email: str) -> Optional[int]:
+    """Resolves a signed-in session's email (the only thing a session JWT
+    carries — see airi/auth.py) to a `users.id`, for every workspaces/
+    projects call below. None only if the email has genuinely never
+    logged in, which shouldn't happen for a valid session token."""
+    with _cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE lower(email) = lower(%s)", (email,))
+        row = cur.fetchone()
+        return row["id"] if row else None
+
+
+# ---------- user_profile (workspaces feature: the "app key" PIN) ----------
+
+def get_user_profile(user_id: int) -> Optional[dict]:
+    """None means the row doesn't exist yet (user has never saved an app
+    key) — distinct from a row existing with app_key_hash = NULL, which
+    this schema never actually produces (see set_app_key_hash)."""
+    with _cursor() as cur:
+        cur.execute("SELECT user_id, app_key_hash, updated_at FROM user_profile WHERE user_id = %s", (user_id,))
+        return cur.fetchone()
+
+
+def set_app_key_hash(user_id: int, app_key_hash: str) -> None:
+    """Creates the profile row on first save, overwrites the hash on any
+    later change — always a full replace, there's only one app key."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO user_profile (user_id, app_key_hash, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (user_id) DO UPDATE SET app_key_hash = EXCLUDED.app_key_hash, updated_at = now()
+            """,
+            (user_id, app_key_hash),
+        )
+
+
+# ---------- workspaces ----------
+
+_WORKSPACE_FIELDS = "id, owner_user_id, title, target, description, created_at, updated_at"
+
+
+def create_workspace(owner_user_id: int, title: str, target: str, description: str) -> dict:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO workspaces (owner_user_id, title, target, description)
+            VALUES (%s, %s, %s, %s)
+            RETURNING {_WORKSPACE_FIELDS}
+            """,
+            (owner_user_id, title, target, description),
+        )
+        return cur.fetchone()
+
+
+def list_workspaces(owner_user_id: int) -> List[dict]:
+    """Includes a member/project count per workspace so the workspace-list
+    view doesn't need N follow-up queries."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT w.*,
+                   (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = w.id) AS member_count,
+                   (SELECT count(*) FROM projects p WHERE p.workspace_id = w.id) AS project_count
+            FROM workspaces w
+            WHERE w.owner_user_id = %s
+            ORDER BY w.created_at DESC
+            """,
+            (owner_user_id,),
+        )
+        return cur.fetchall()
+
+
+def get_workspace(workspace_id: int) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(f"SELECT {_WORKSPACE_FIELDS} FROM workspaces WHERE id = %s", (workspace_id,))
+        return cur.fetchone()
+
+
+def update_workspace(workspace_id: int, title: str, target: str, description: str) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE workspaces SET title = %s, target = %s, description = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_WORKSPACE_FIELDS}
+            """,
+            (title, target, description, workspace_id),
+        )
+        return cur.fetchone()
+
+
+def delete_workspace(workspace_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM workspaces WHERE id = %s", (workspace_id,))
+        return cur.rowcount > 0
+
+
+# ---------- workspace_members ----------
+
+def add_workspace_member(workspace_id: int, email: str) -> Optional[dict]:
+    """Returns the new member row, or None if that email is already a
+    member of this workspace (caller turns that into a 409, not a 500)."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO workspace_members (workspace_id, email)
+            VALUES (%s, lower(%s))
+            ON CONFLICT (workspace_id, lower(email)) DO NOTHING
+            RETURNING id, workspace_id, email, added_at
+            """,
+            (workspace_id, email),
+        )
+        return cur.fetchone()
+
+
+def list_workspace_members(workspace_id: int) -> List[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT id, workspace_id, email, added_at FROM workspace_members WHERE workspace_id = %s ORDER BY added_at ASC",
+            (workspace_id,),
+        )
+        return cur.fetchall()
+
+
+def get_workspace_member(workspace_id: int, member_id: int) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT id, workspace_id, email, added_at FROM workspace_members WHERE workspace_id = %s AND id = %s",
+            (workspace_id, member_id),
+        )
+        return cur.fetchone()
+
+
+def remove_workspace_member(workspace_id: int, member_id: int) -> Optional[dict]:
+    """Returns the deleted row (so the caller has the email to notify),
+    or None if no such member existed."""
+    with _cursor() as cur:
+        cur.execute(
+            "DELETE FROM workspace_members WHERE workspace_id = %s AND id = %s RETURNING id, workspace_id, email, added_at",
+            (workspace_id, member_id),
+        )
+        return cur.fetchone()
+
+
+# ---------- projects ----------
+
+_PROJECT_FIELDS = "id, workspace_id, title, description, tech_stack, created_at, updated_at"
+
+
+def create_project(workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any]) -> dict:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO projects (workspace_id, title, description, tech_stack)
+            VALUES (%s, %s, %s, %s)
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (workspace_id, title, description, Json(tech_stack)),
+        )
+        return cur.fetchone()
+
+
+def list_projects(workspace_id: int) -> List[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT {_PROJECT_FIELDS} FROM projects WHERE workspace_id = %s ORDER BY created_at ASC",
+            (workspace_id,),
+        )
+        return cur.fetchall()
+
+
+def get_project(project_id: int) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(f"SELECT {_PROJECT_FIELDS} FROM projects WHERE id = %s", (project_id,))
+        return cur.fetchone()
+
+
+def update_project(project_id: int, title: str, description: str, tech_stack: Dict[str, Any]) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects SET title = %s, description = %s, tech_stack = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (title, description, Json(tech_stack), project_id),
+        )
+        return cur.fetchone()
+
+
+def delete_project(project_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+        return cur.rowcount > 0

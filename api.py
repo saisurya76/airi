@@ -14,7 +14,7 @@ import time
 import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, db, runtime_config
+from airi import author, db, runtime_config, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -39,7 +39,7 @@ from airi.auth import (
     verify_code,
     verify_session_token,
 )
-from airi.email_provider import EmailSendError, send_otp_email
+from airi.email_provider import EmailSendError, send_member_added_email, send_member_removed_email, send_otp_email
 from airi.exact_provider import ExactCountUnavailable, count_tokens_exact, has_exact_provider
 from airi.projector import MAX_ARCHETYPES
 from airi.registry import MODEL_REGISTRY, get_model_spec, is_known_model
@@ -78,6 +78,80 @@ def _get_admin_password() -> str:
     if not password:
         raise HTTPException(status_code=503, detail="The admin page isn't configured on this deployment yet.")
     return password
+
+
+def _require_session_email(authorization: Optional[str]) -> str:
+    """Shared by every workspaces/projects/profile endpoint: 401 on a
+    missing/invalid/expired session token, else the signed-in email."""
+    secret = _get_auth_secret()
+    try:
+        return verify_session_token(extract_bearer_token(authorization), secret)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+
+def _require_user_id(authorization: Optional[str]) -> int:
+    """Resolves the session's email to a `users.id`. A signed-in session
+    with no matching user row shouldn't happen (verify-code always
+    upserts one first) — treated as an expired/invalid session rather
+    than a 500 if it somehow does."""
+    email = _require_session_email(authorization)
+    try:
+        user_id = db.get_user_id_by_email(email)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Your session is no longer valid — sign in again.")
+    return user_id
+
+
+def _get_owned_workspace(workspace_id: int, user_id: int) -> dict:
+    """404 (not 403) whether the workspace doesn't exist or just isn't
+    this user's — never confirms another workspace id exists."""
+    try:
+        workspace = db.get_workspace(workspace_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if workspace is None or workspace["owner_user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    return workspace
+
+
+def _get_owned_project(project_id: int, user_id: int) -> Tuple[dict, dict]:
+    """Returns (project, workspace) after confirming the project's parent
+    workspace belongs to this user. Same 404-not-403 reasoning."""
+    try:
+        proj = db.get_project(project_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    workspace = _get_owned_workspace(proj["workspace_id"], user_id)
+    return proj, workspace
+
+
+def _require_app_key_confirmed(user_id: int, submitted_app_key: Optional[str]) -> None:
+    """Gate for every destructive workspace/project action (requirement:
+    re-enter the profile app key before any delete). 400 either way —
+    this is a per-caller, fixable problem, not a deployment one:
+      - no app key saved yet: tell them to set one up first (there's
+        nothing to confirm against otherwise, so deletion is blocked
+        rather than silently allowed).
+      - key missing/blank/wrong: a plain "incorrect" message, matching
+        the OTP-verify convention of never hinting at which part failed.
+    """
+    try:
+        profile = db.get_user_profile(user_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if not profile or not profile.get("app_key_hash"):
+        raise HTTPException(
+            status_code=400,
+            detail="Set an app key in your profile before deleting anything — it's used to confirm destructive actions.",
+        )
+    secret = _get_auth_secret()
+    if not ws.verify_app_key(user_id, submitted_app_key or "", secret, profile["app_key_hash"]):
+        raise HTTPException(status_code=400, detail="Incorrect app key.")
 
 
 def _require_admin(authorization: Optional[str]) -> None:
@@ -206,6 +280,35 @@ class AuthorProfileBody(BaseModel):
     twitter: str = ""
     github: str = ""
     photo_data_url: str = ""
+
+
+class AppKeyBody(BaseModel):
+    app_key: str = Field(min_length=1, max_length=4)
+
+
+class AppKeyConfirmBody(BaseModel):
+    """Sent on every destructive workspaces/projects call — see
+    _require_app_key_confirmed. Optional/defaulted so a caller who
+    hasn't set up an app key yet still gets the clear "set one up
+    first" 400 rather than a 422 for a missing field."""
+
+    app_key: str = ""
+
+
+class WorkspaceBody(BaseModel):
+    title: str = ""
+    target: str = ""
+    description: str = ""
+
+
+class WorkspaceMemberBody(BaseModel):
+    email: str = ""
+
+
+class ProjectBody(BaseModel):
+    title: str = ""
+    description: str = ""
+    tech_stack: Dict[str, str] = Field(default_factory=dict)
 
 
 class ArchetypeRequest(BaseModel):
@@ -363,6 +466,205 @@ def auth_me(authorization: Optional[str] = Header(default=None)):
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
     return {"email": email}
+
+
+# --- Workspaces / Projects (Phase 1 — see docs/WORKSPACES.md) ---
+#
+# Everything below requires a signed-in session (Authorization: Bearer
+# <token> from /auth/verify-code) — this is entirely gated behind the
+# same "Exact" flavor sign-in used by /analyze/exact, per the original
+# request ("workspaces feature: works only after user logs in with
+# OTP"). None of it touches /analyze, /project, /report* — those stay
+# completely anonymous and stateless as documented elsewhere.
+
+
+@app.get("/profile")
+def get_profile(authorization: Optional[str] = Header(default=None)):
+    """Whether this signed-in user has an app key saved yet — never the
+    key or its hash. The frontend uses this to decide whether to show
+    "set your app key" or "change your app key" on the profile panel,
+    and to gate delete actions behind "you need to set one up first"."""
+    user_id = _require_user_id(authorization)
+    try:
+        profile = db.get_user_profile(user_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"has_app_key": bool(profile and profile.get("app_key_hash"))}
+
+
+@app.post("/profile/app-key")
+def set_app_key(body: AppKeyBody, authorization: Optional[str] = Header(default=None)):
+    """Sets or changes the signed-in user's app key. Only ever stores a
+    hash (see airi.workspaces.hash_app_key) — the digits themselves are
+    never written to the database, logged, or returned by any endpoint."""
+    user_id = _require_user_id(authorization)
+    secret = _get_auth_secret()
+    try:
+        app_key = ws.normalize_app_key(body.app_key)
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        db.set_app_key_hash(user_id, ws.hash_app_key(user_id, app_key, secret))
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"has_app_key": True}
+
+
+def _workspace_detail(workspace: dict) -> dict:
+    """A workspace plus its members and projects — everything requirement
+    #10 ("when he logs in all the above details must be shown back")
+    needs for one workspace in one call."""
+    workspace_id = workspace["id"]
+    return {
+        **workspace,
+        "members": db.list_workspace_members(workspace_id),
+        "projects": db.list_projects(workspace_id),
+    }
+
+
+@app.get("/workspaces")
+def list_workspaces(authorization: Optional[str] = Header(default=None)):
+    """Every workspace this signed-in user owns, most recent first, with
+    member/project counts — the workspace-list view."""
+    user_id = _require_user_id(authorization)
+    try:
+        return db.list_workspaces(user_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/workspaces")
+def create_workspace(body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    try:
+        title, target, description = ws.validate_workspace_fields(body.model_dump())
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        workspace = db.create_workspace(user_id, title, target, description)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return _workspace_detail(workspace)
+
+
+@app.get("/workspaces/{workspace_id}")
+def get_workspace(workspace_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    workspace = _get_owned_workspace(workspace_id, user_id)
+    return _workspace_detail(workspace)
+
+
+@app.put("/workspaces/{workspace_id}")
+def update_workspace(workspace_id: int, body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_workspace(workspace_id, user_id)
+    try:
+        title, target, description = ws.validate_workspace_fields(body.model_dump())
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    workspace = db.update_workspace(workspace_id, title, target, description)
+    return _workspace_detail(workspace)
+
+
+@app.delete("/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
+    """Deleting a workspace cascades to its members and projects (see
+    sql/003_workspaces_schema.sql's ON DELETE CASCADE) — the app-key
+    confirmation exists specifically because this one action can take
+    an entire workspace's projects with it."""
+    user_id = _require_user_id(authorization)
+    _get_owned_workspace(workspace_id, user_id)
+    _require_app_key_confirmed(user_id, body.app_key)
+    db.delete_workspace(workspace_id)
+    return {"deleted": True}
+
+
+@app.post("/workspaces/{workspace_id}/members")
+def add_workspace_member(workspace_id: int, body: WorkspaceMemberBody, authorization: Optional[str] = Header(default=None)):
+    """Adds a team member by email and sends them a standard notification
+    (best-effort — see the try/except below: a Resend hiccup shouldn't
+    block adding the member, since the membership itself is what matters
+    and the notification is a courtesy, not a confirmation the member
+    must act on)."""
+    user_id = _require_user_id(authorization)
+    workspace = _get_owned_workspace(workspace_id, user_id)
+    try:
+        email = ws.normalize_member_email(body.email)
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    member = db.add_workspace_member(workspace_id, email)
+    if member is None:
+        raise HTTPException(status_code=409, detail=f"{email} is already a member of this workspace.")
+
+    try:
+        send_member_added_email(email, workspace["title"])
+    except EmailSendError:
+        pass  # membership is saved either way; the email is a courtesy
+
+    return member
+
+
+@app.delete("/workspaces/{workspace_id}/members/{member_id}")
+def remove_workspace_member(workspace_id: int, member_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    workspace = _get_owned_workspace(workspace_id, user_id)
+    member = db.remove_workspace_member(workspace_id, member_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+
+    try:
+        send_member_removed_email(member["email"], workspace["title"])
+    except EmailSendError:
+        pass
+
+    return {"deleted": True}
+
+
+@app.get("/projects/tech-stack-categories")
+def tech_stack_categories():
+    """The tech-stack form's category list (label + required/optional),
+    so the frontend never has to hardcode it separately from
+    airi/workspaces.py — add a category there and it shows up here."""
+    return ws.TECH_STACK_CATEGORIES
+
+
+@app.post("/workspaces/{workspace_id}/projects")
+def create_project(workspace_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_workspace(workspace_id, user_id)
+    try:
+        title, description, tech_stack = ws.validate_project_fields(body.model_dump())
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return db.create_project(workspace_id, title, description, tech_stack)
+
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    project_row, _workspace = _get_owned_project(project_id, user_id)
+    return project_row
+
+
+@app.put("/projects/{project_id}")
+def update_project(project_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    try:
+        title, description, tech_stack = ws.validate_project_fields(body.model_dump())
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return db.update_project(project_id, title, description, tech_stack)
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    _require_app_key_confirmed(user_id, body.app_key)
+    db.delete_project(project_id)
+    return {"deleted": True}
 
 
 def _resolve_exact_api_key(body: "ExactAnalyzeRequest", provider: str, test_mode: bool) -> str:

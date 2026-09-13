@@ -26,6 +26,10 @@ build intentionally skips.
   (`frontend/admin.html`): the test-mode ↔ BYOK toggle for Exact mode,
   the founder/author profile shown on `frontend/author.html`, and the
   `/config`/`/admin/*`/`/author` API reference.
+- **[docs/WORKSPACES.md](docs/WORKSPACES.md)** — workspaces/projects
+  (`frontend/workspaces.html`, Phase 1): the app-key delete-confirmation
+  PIN, tech-stack categories, and the `/profile`/`/workspaces`/`/projects`
+  API reference.
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
 
@@ -74,9 +78,10 @@ print(result.to_dict())
 Run the sanity tests any time with `python3 tests/test_analyzer.py`,
 `python3 tests/test_projector.py`, `python3 tests/test_report.py`,
 `python3 tests/test_auth.py`, `python3 tests/test_exact_provider.py`,
-`python3 tests/test_runtime_config.py`, and `python3 tests/test_author.py`
-(the last three need no database/network — they test pure logic and
-mocked HTTP calls).
+`python3 tests/test_runtime_config.py`, `python3 tests/test_author.py`,
+and `python3 tests/test_workspaces.py` (the auth/exact/runtime_config/
+author/workspaces ones need no database/network — they test pure logic
+and mocked HTTP calls), or all at once with `pytest tests/ -q`.
 
 ## Project layout
 
@@ -96,7 +101,8 @@ airi/                   core library — zero web/db/cloud dependencies
   exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
   runtime_config.py       API-layer only: test-mode/BYOK toggle (env var + admin-page override)
   author.py               API-layer only: founder/author profile storage + validation (app_config-backed)
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /author, /download, /models, /health
+  workspaces.py           API-layer only: app-key PIN hashing + workspace/project/tech-stack validation (pure logic)
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /author, /download, /models, /health, /profile, /workspaces/*, /projects/*
 frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
 frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment checklist + author-profile editor
@@ -104,10 +110,12 @@ frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a
 frontend/developers.html  API quick reference + "download the source" button (GET /download)
 frontend/author.html   public founder/about page, built entirely from the admin-edited author profile
 frontend/privacy.html  privacy policy, linked from every page's footer
+frontend/workspaces.html  signed-in workspaces/projects app (Phase 1: CRUD + app-key delete confirmation)
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
 sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode + author profile)
+sql/003_workspaces_schema.sql  Neon schema for user_profile/workspaces/workspace_members/projects
 tests/                  sanity checks for every module above
-docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page)
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page), WORKSPACES.md (workspaces/projects Phase 1)
 ```
 
 The core library never imports FastAPI, and never makes a network call

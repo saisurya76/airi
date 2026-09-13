@@ -1,7 +1,9 @@
 """
-Sends the OTP code email via Resend's HTTP API. A deliberately thin
-wrapper — one POST, no SDK dependency — since that's all Resend's API
-actually is.
+Sends transactional email via Resend's HTTP API: the OTP sign-in code,
+and workspace-member-added/removed notifications (see airi/workspaces.py
+and the /workspaces/{id}/members endpoints in api.py). A deliberately
+thin wrapper — one POST per send, no SDK dependency — since that's all
+Resend's API actually is.
 
 Requires a verified sending domain in Resend (their sandbox domain can
 only deliver to the Resend account's own address, not to real users) —
@@ -46,13 +48,11 @@ def _subject_and_body(code: str) -> tuple:
     return subject, text, html
 
 
-def send_otp_email(to_email: str, code: str) -> None:
+def _send(to_email: str, subject: str, text: str, html: str) -> None:
     api_key = os.environ.get("RESEND_API_KEY")
     from_email = os.environ.get("RESEND_FROM_EMAIL")
     if not api_key or not from_email:
-        raise EmailSendError("Email sign-in isn't configured on this deployment yet.")
-
-    subject, text, html = _subject_and_body(code)
+        raise EmailSendError("Email sending isn't configured on this deployment yet.")
 
     try:
         resp = httpx.post(
@@ -72,4 +72,40 @@ def send_otp_email(to_email: str, code: str) -> None:
             detail = resp.json().get("message", detail)
         except Exception:
             pass
-        raise EmailSendError(f"Could not send the code: {detail}")
+        raise EmailSendError(f"Could not send the email: {detail}")
+
+
+def send_otp_email(to_email: str, code: str) -> None:
+    subject, text, html = _subject_and_body(code)
+    _send(to_email, subject, text, html)
+
+
+def _member_email_body(workspace_title: str, action: str) -> tuple:
+    """`action` is "added to" or "removed from" — used for both the
+    workspace-member add/remove notifications below."""
+    subject = f"You've been {action} the \"{workspace_title}\" workspace on AIRI"
+    text = (
+        f"You've been {action} the \"{workspace_title}\" workspace on AIRI "
+        "(AI Request Intelligence) by its owner.\n\n"
+        "This is an automatic notification — AIRI doesn't require any action "
+        "from you unless the workspace owner asks you to sign in and "
+        "collaborate directly."
+    )
+    html = f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;">
+  <p style="color:#6b7280;font-size:12px;font-weight:700;letter-spacing:0.08em;margin:0 0 16px;">AIRI &mdash; AI REQUEST INTELLIGENCE</p>
+  <p style="font-size:15px;color:#1a1a1a;margin:0 0 8px;">You've been <b>{action}</b> the workspace:</p>
+  <p style="font-size:20px;font-weight:700;color:#14213d;margin:0 0 20px;">{workspace_title}</p>
+  <p style="font-size:13px;color:#6b7280;margin:0;">This is an automatic notification from the workspace owner — no action is needed unless they ask you to collaborate directly.</p>
+</div>"""
+    return subject, text, html
+
+
+def send_member_added_email(to_email: str, workspace_title: str) -> None:
+    subject, text, html = _member_email_body(workspace_title, "added to")
+    _send(to_email, subject, text, html)
+
+
+def send_member_removed_email(to_email: str, workspace_title: str) -> None:
+    subject, text, html = _member_email_body(workspace_title, "removed from")
+    _send(to_email, subject, text, html)

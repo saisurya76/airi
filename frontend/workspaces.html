@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Workspaces</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  h3 { font-size: 14px; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  textarea, select, input {
+    width: 100%;
+    background: #0f1115;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  textarea { min-height: 70px; resize: vertical; }
+  .row { display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .field { margin-top: 14px; }
+  .field:first-child { margin-top: 0; }
+  button {
+    background: var(--accent);
+    color: #0f1115;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .secondary-btn { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .danger-btn { background: transparent; color: var(--exceeded); border: 1px solid rgba(242,85,90,0.4); }
+  .danger-btn:hover { background: rgba(242,85,90,0.1); }
+  .link-btn { background: transparent; color: var(--accent); border: none; padding: 0; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .link-btn:hover { text-decoration: underline; }
+  .error {
+    color: var(--exceeded);
+    font-size: 13px;
+    margin-top: 10px;
+    background: rgba(242,85,90,0.1);
+    border: 1px solid rgba(242,85,90,0.3);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .notice {
+    color: var(--safe);
+    font-size: 12px;
+    margin-top: 10px;
+    background: rgba(62,207,142,0.1);
+    border: 1px solid rgba(62,207,142,0.3);
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+  .hidden { display: none; }
+  .otp-input { letter-spacing: 0.3em; font-size: 18px; text-align: center; }
+
+  .top-nav { display: flex; align-items: center; justify-content: flex-end; gap: 18px; margin-bottom: 14px; font-size: 12px; flex-wrap: wrap; }
+  .top-nav a { color: var(--muted); text-decoration: none; font-weight: 600; }
+  .top-nav a:hover { color: var(--accent); text-decoration: underline; }
+  .top-nav a.author-link {
+    background: linear-gradient(135deg, var(--accent), #9b7ef2);
+    color: #0f1115;
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+  .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: #0f1115; }
+  .top-nav a.active { color: var(--text); }
+
+  .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+
+  .app-key-row { display: flex; gap: 8px; align-items: center; }
+  .app-key-row input { flex: 1; letter-spacing: 0.3em; font-size: 16px; }
+  .eye-btn {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .eye-btn:hover { color: var(--text); }
+  .app-key-status { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .app-key-status.set { color: var(--safe); }
+
+  .ws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+  .ws-card {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    cursor: pointer;
+  }
+  .ws-card:hover { border-color: var(--accent); }
+  .ws-card h3 { margin: 0 0 6px; }
+  .ws-card .target { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .ws-card .counts { font-size: 12px; color: var(--muted); }
+  .empty-state { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
+
+  .back-link { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .back-link:hover { text-decoration: underline; }
+  .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .autosave-note { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  .member-row, .project-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 8px;
+  }
+  .project-row { flex-direction: column; align-items: stretch; }
+  .project-row .project-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+  .project-row .project-summary .stack-chip { font-size: 11px; color: var(--muted); }
+  .project-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .required-mark { color: var(--exceeded); }
+  .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .tab-note {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 14px;
+    background: rgba(122,162,255,0.08);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50;
+  }
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px;
+    max-width: 380px;
+    width: 100%;
+  }
+  .modal-box p { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .modal-actions button { flex: 1; }
+
+  .site-footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-nav">
+      <a href="about.html">What's AIRI?</a>
+      <a href="workspaces.html" class="active">Workspaces</a>
+      <a href="author.html" class="author-link">Author</a>
+      <a href="developers.html">Developers</a>
+    </div>
+
+    <!-- ---------- Sign-in gate ---------- -->
+    <div id="signInView">
+      <h1>Workspaces</h1>
+      <p class="sub">Organize your projects into workspaces, invite your team, and (soon) run every AIRI
+        tool per project with a shared dashboard. Sign in with a one-time email code to continue —
+        the same sign-in used for Exact mode on the main page.</p>
+      <div class="panel">
+        <div id="authStep1">
+          <label for="authEmailInput">Email</label>
+          <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+          <div class="row"><div><button type="button" id="sendCodeBtn" style="width:100%;">Send code</button></div></div>
+          <div id="authError1" class="error hidden"></div>
+        </div>
+        <div id="authStep2" class="hidden">
+          <label for="authCodeInput">6-digit code (check your email)</label>
+          <input id="authCodeInput" class="otp-input" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+          <div class="row">
+            <div><button type="button" id="verifyCodeBtn" style="width:100%;">Verify</button></div>
+            <div><button type="button" id="resendCodeBtn" class="secondary-btn" style="width:100%;">Resend code</button></div>
+          </div>
+          <div id="authError2" class="error hidden"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- Signed-in app ---------- -->
+    <div id="appView" class="hidden">
+      <div class="auth-status">
+        <span id="authEmailLabel"></span>
+        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+      </div>
+
+      <!-- Profile / app key -->
+      <div class="panel">
+        <h2>Your app key</h2>
+        <p class="sub" style="margin:0 0 14px;">A 4-digit PIN you choose. AIRI asks you to re-enter it before
+          any delete (a workspace, a project, a team member) — a confirmation step, not a login credential.
+          Only a hash of it is ever stored.</p>
+        <div class="app-key-row">
+          <input id="appKeyInput" type="password" inputmode="numeric" maxlength="4" placeholder="••••" />
+          <button type="button" id="appKeyEyeBtn" class="eye-btn">Show</button>
+          <button type="button" id="appKeySaveBtn">Save</button>
+        </div>
+        <div id="appKeyStatus" class="app-key-status">Loading…</div>
+        <div id="appKeyError" class="error hidden"></div>
+        <div id="appKeyNotice" class="notice hidden"></div>
+      </div>
+
+      <!-- Workspace list -->
+      <div id="workspaceListView">
+        <div class="panel">
+          <h2>New workspace</h2>
+          <div class="field">
+            <label for="newWsTitle">Title <span class="required-mark">*</span></label>
+            <input id="newWsTitle" placeholder="e.g. Citizen Score Revamp" />
+          </div>
+          <div class="field">
+            <label for="newWsTarget">High-level target of the exercise</label>
+            <input id="newWsTarget" placeholder="e.g. Cut per-request cost by 30%" />
+          </div>
+          <div class="field">
+            <label for="newWsDescription">Description</label>
+            <textarea id="newWsDescription" placeholder="What is this workspace for?"></textarea>
+          </div>
+          <div class="row"><div><button type="button" id="createWsBtn">Create workspace</button></div></div>
+          <div id="createWsError" class="error hidden"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Your workspaces</h2>
+          <div id="wsGrid" class="ws-grid"></div>
+          <div id="wsEmptyState" class="empty-state hidden">No workspaces yet — create your first one above.</div>
+        </div>
+      </div>
+
+      <!-- Workspace detail -->
+      <div id="workspaceDetailView" class="hidden">
+        <a href="#" id="backToListLink" class="back-link">← All workspaces</a>
+
+        <div class="panel" style="margin-top:14px;">
+          <div class="detail-header">
+            <div style="flex:1; min-width:200px;">
+              <h2 style="margin-bottom:10px;">Workspace</h2>
+            </div>
+            <button type="button" id="deleteWsBtn" class="danger-btn">Delete workspace</button>
+          </div>
+          <div class="field">
+            <label for="wsTitleInput">Title <span class="required-mark">*</span></label>
+            <input id="wsTitleInput" />
+          </div>
+          <div class="field">
+            <label for="wsTargetInput">High-level target</label>
+            <input id="wsTargetInput" />
+          </div>
+          <div class="field">
+            <label for="wsDescriptionInput">Description</label>
+            <textarea id="wsDescriptionInput"></textarea>
+          </div>
+          <div id="wsAutosaveNote" class="autosave-note">Changes save automatically.</div>
+          <div id="wsSaveError" class="error hidden"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Team members</h2>
+          <p class="sub" style="margin:0 0 10px;">Each member gets a standard email notification when added or removed.</p>
+          <div class="row">
+            <div><input id="newMemberEmail" type="email" placeholder="teammate@example.com" /></div>
+            <div style="flex:0;"><button type="button" id="addMemberBtn">Add</button></div>
+          </div>
+          <div id="addMemberError" class="error hidden"></div>
+          <div id="membersList"></div>
+          <div id="membersEmptyState" class="empty-state hidden">No team members yet.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Projects</h2>
+          <div id="projectsList"></div>
+          <div id="projectsEmptyState" class="empty-state hidden">No projects yet — add your first one below.</div>
+
+          <h3 style="margin-top:20px;">New project</h3>
+          <div class="field">
+            <label for="newProjTitle">Title <span class="required-mark">*</span></label>
+            <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
+          </div>
+          <div class="field">
+            <label for="newProjDescription">Description</label>
+            <textarea id="newProjDescription"></textarea>
+          </div>
+          <div id="newProjTechStack" class="tech-grid"></div>
+          <div class="row"><div><button type="button" id="createProjectBtn">Add project</button></div></div>
+          <div id="createProjectError" class="error hidden"></div>
+
+          <div class="tab-note">
+            Per-project AIRI tool tabs, a dashboard, a notes history, an actions/report tab, and a
+            cross-project comparison view are on the way in the next phase — for now each project's
+            description and tech stack are saved here and restored whenever you sign back in.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- Delete confirmation modal ---------- -->
+    <div id="confirmModal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <h3 id="confirmModalTitle">Confirm delete</h3>
+        <p id="confirmModalBody">This can't be undone.</p>
+        <label for="confirmAppKeyInput">Enter your 4-digit app key to confirm</label>
+        <input id="confirmAppKeyInput" type="password" inputmode="numeric" maxlength="4" placeholder="••••" />
+        <div id="confirmModalError" class="error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="confirmModalCancelBtn" class="secondary-btn">Cancel</button>
+          <button type="button" id="confirmModalDeleteBtn" class="danger-btn">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="site-footer">
+      <a href="privacy.html">Privacy</a>
+    </div>
+  </div>
+
+<script>
+  // Same split-hosting note as index.html: the API lives on Render, this
+  // page on GitHub Pages. Update this if you redeploy the API elsewhere.
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+
+  // Shared with index.html — signing in on either page keeps both in sync.
+  const AUTH_TOKEN_KEY = "airi_auth_token";
+  const AUTH_EMAIL_KEY = "airi_auth_email";
+
+  let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
+  let authEmail = localStorage.getItem(AUTH_EMAIL_KEY) || null;
+  let hasAppKey = false;
+  let appKeyRevealed = false;
+  let workspaces = [];
+  let currentWorkspace = null; // full detail object, or null when on the list view
+  let techStackCategories = {};
+
+  const signInView = document.getElementById("signInView");
+  const appView = document.getElementById("appView");
+  const authStep1 = document.getElementById("authStep1");
+  const authStep2 = document.getElementById("authStep2");
+  const authError1 = document.getElementById("authError1");
+  const authError2 = document.getElementById("authError2");
+  const sendCodeBtn = document.getElementById("sendCodeBtn");
+  const verifyCodeBtn = document.getElementById("verifyCodeBtn");
+
+  function authHeaders() {
+    return { Authorization: `Bearer ${authToken}` };
+  }
+
+  function signOut() {
+    authToken = null;
+    authEmail = null;
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_EMAIL_KEY);
+    appView.classList.add("hidden");
+    signInView.classList.remove("hidden");
+  }
+
+  async function apiFetch(path, options = {}) {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...authHeaders(), ...(options.headers || {}) },
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* no body */ }
+    if (res.status === 401) {
+      signOut();
+      throw new Error("Your session expired — sign in again.");
+    }
+    if (!res.ok) {
+      throw new Error((data && data.detail) || "Something went wrong.");
+    }
+    return data;
+  }
+
+  // ---------- sign-in (OTP) ----------
+
+  async function requestCode() {
+    authError1.classList.add("hidden");
+    const email = document.getElementById("authEmailInput").value.trim();
+    if (!email) {
+      authError1.textContent = "Enter your email first.";
+      authError1.classList.remove("hidden");
+      return;
+    }
+    sendCodeBtn.disabled = true;
+    sendCodeBtn.textContent = "Sending…";
+    try {
+      const res = await fetch(`${API_BASE}/auth/request-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not send a code.");
+      authStep1.classList.add("hidden");
+      authStep2.classList.remove("hidden");
+      document.getElementById("authCodeInput").focus();
+    } catch (e) {
+      authError1.textContent = e.message;
+      authError1.classList.remove("hidden");
+    } finally {
+      sendCodeBtn.disabled = false;
+      sendCodeBtn.textContent = "Send code";
+    }
+  }
+
+  async function verifyCode() {
+    authError2.classList.add("hidden");
+    const email = document.getElementById("authEmailInput").value.trim();
+    const code = document.getElementById("authCodeInput").value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      authError2.textContent = "Enter the 6-digit code from your email.";
+      authError2.classList.remove("hidden");
+      return;
+    }
+    verifyCodeBtn.disabled = true;
+    verifyCodeBtn.textContent = "Verifying…";
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Verification failed.");
+      authToken = data.token;
+      authEmail = data.email;
+      localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+      localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      await enterApp();
+    } catch (e) {
+      authError2.textContent = e.message;
+      authError2.classList.remove("hidden");
+    } finally {
+      verifyCodeBtn.disabled = false;
+      verifyCodeBtn.textContent = "Verify";
+    }
+  }
+
+  document.getElementById("sendCodeBtn").addEventListener("click", requestCode);
+  document.getElementById("verifyCodeBtn").addEventListener("click", verifyCode);
+  document.getElementById("resendCodeBtn").addEventListener("click", requestCode);
+  document.getElementById("signOutBtn").addEventListener("click", signOut);
+
+  // ---------- app key (profile) ----------
+
+  const appKeyInput = document.getElementById("appKeyInput");
+  const appKeyEyeBtn = document.getElementById("appKeyEyeBtn");
+  const appKeyStatus = document.getElementById("appKeyStatus");
+  const appKeyError = document.getElementById("appKeyError");
+  const appKeyNotice = document.getElementById("appKeyNotice");
+
+  function renderAppKeyStatus() {
+    appKeyStatus.textContent = hasAppKey
+      ? "App key is set — enter a new 4-digit code above and save to change it."
+      : "No app key set yet — required before you can delete anything.";
+    appKeyStatus.classList.toggle("set", hasAppKey);
+  }
+
+  appKeyEyeBtn.addEventListener("click", () => {
+    appKeyRevealed = !appKeyRevealed;
+    appKeyInput.type = appKeyRevealed ? "text" : "password";
+    appKeyEyeBtn.textContent = appKeyRevealed ? "Hide" : "Show";
+  });
+
+  document.getElementById("appKeySaveBtn").addEventListener("click", async () => {
+    appKeyError.classList.add("hidden");
+    appKeyNotice.classList.add("hidden");
+    const value = appKeyInput.value.trim();
+    if (!/^\d{4}$/.test(value)) {
+      appKeyError.textContent = "App key must be exactly 4 digits.";
+      appKeyError.classList.remove("hidden");
+      return;
+    }
+    try {
+      const data = await apiFetch("/profile/app-key", { method: "POST", body: JSON.stringify({ app_key: value }) });
+      hasAppKey = data.has_app_key;
+      renderAppKeyStatus();
+      appKeyInput.value = "";
+      appKeyRevealed = false;
+      appKeyInput.type = "password";
+      appKeyEyeBtn.textContent = "Show";
+      appKeyNotice.textContent = "App key saved.";
+      appKeyNotice.classList.remove("hidden");
+    } catch (e) {
+      appKeyError.textContent = e.message;
+      appKeyError.classList.remove("hidden");
+    }
+  });
+
+  // ---------- generic delete-confirmation modal ----------
+
+  const confirmModal = document.getElementById("confirmModal");
+  const confirmModalTitle = document.getElementById("confirmModalTitle");
+  const confirmModalBody = document.getElementById("confirmModalBody");
+  const confirmAppKeyInput = document.getElementById("confirmAppKeyInput");
+  const confirmModalError = document.getElementById("confirmModalError");
+  let confirmModalOnConfirm = null;
+
+  function openConfirmModal(title, body, onConfirm) {
+    confirmModalTitle.textContent = title;
+    confirmModalBody.textContent = body;
+    confirmAppKeyInput.value = "";
+    confirmModalError.classList.add("hidden");
+    confirmModalOnConfirm = onConfirm;
+    confirmModal.classList.remove("hidden");
+    confirmAppKeyInput.focus();
+  }
+
+  function closeConfirmModal() {
+    confirmModal.classList.add("hidden");
+    confirmModalOnConfirm = null;
+  }
+
+  document.getElementById("confirmModalCancelBtn").addEventListener("click", closeConfirmModal);
+  document.getElementById("confirmModalDeleteBtn").addEventListener("click", async () => {
+    confirmModalError.classList.add("hidden");
+    const appKey = confirmAppKeyInput.value.trim();
+    if (!confirmModalOnConfirm) return;
+    try {
+      await confirmModalOnConfirm(appKey);
+      closeConfirmModal();
+    } catch (e) {
+      confirmModalError.textContent = e.message;
+      confirmModalError.classList.remove("hidden");
+    }
+  });
+
+  // ---------- workspace list ----------
+
+  const wsGrid = document.getElementById("wsGrid");
+  const wsEmptyState = document.getElementById("wsEmptyState");
+  const workspaceListView = document.getElementById("workspaceListView");
+  const workspaceDetailView = document.getElementById("workspaceDetailView");
+
+  function renderWorkspaceGrid() {
+    wsGrid.innerHTML = "";
+    wsEmptyState.classList.toggle("hidden", workspaces.length > 0);
+    for (const w of workspaces) {
+      const card = document.createElement("div");
+      card.className = "ws-card";
+      card.dataset.id = w.id;
+      const target = w.target ? `<p class="target">${escapeHtml(w.target)}</p>` : "";
+      card.innerHTML = `
+        <h3>${escapeHtml(w.title)}</h3>
+        ${target}
+        <div class="counts">${w.member_count} member${w.member_count === 1 ? "" : "s"} · ${w.project_count} project${w.project_count === 1 ? "" : "s"}</div>
+      `;
+      card.addEventListener("click", () => openWorkspace(w.id));
+      wsGrid.appendChild(card);
+    }
+  }
+
+  async function loadWorkspaces() {
+    workspaces = await apiFetch("/workspaces");
+    renderWorkspaceGrid();
+  }
+
+  document.getElementById("createWsBtn").addEventListener("click", async () => {
+    const errorEl = document.getElementById("createWsError");
+    errorEl.classList.add("hidden");
+    const body = {
+      title: document.getElementById("newWsTitle").value.trim(),
+      target: document.getElementById("newWsTarget").value.trim(),
+      description: document.getElementById("newWsDescription").value.trim(),
+    };
+    try {
+      const workspace = await apiFetch("/workspaces", { method: "POST", body: JSON.stringify(body) });
+      document.getElementById("newWsTitle").value = "";
+      document.getElementById("newWsTarget").value = "";
+      document.getElementById("newWsDescription").value = "";
+      await loadWorkspaces();
+      openWorkspace(workspace.id);
+    } catch (e) {
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
+    }
+  });
+
+  document.getElementById("backToListLink").addEventListener("click", (evt) => {
+    evt.preventDefault();
+    currentWorkspace = null;
+    workspaceDetailView.classList.add("hidden");
+    workspaceListView.classList.remove("hidden");
+    loadWorkspaces();
+  });
+
+  // ---------- workspace detail ----------
+
+  const wsTitleInput = document.getElementById("wsTitleInput");
+  const wsTargetInput = document.getElementById("wsTargetInput");
+  const wsDescriptionInput = document.getElementById("wsDescriptionInput");
+  const wsSaveError = document.getElementById("wsSaveError");
+  let wsAutosaveTimer = null;
+
+  async function openWorkspace(id) {
+    currentWorkspace = await apiFetch(`/workspaces/${id}`);
+    wsTitleInput.value = currentWorkspace.title;
+    wsTargetInput.value = currentWorkspace.target;
+    wsDescriptionInput.value = currentWorkspace.description;
+    wsSaveError.classList.add("hidden");
+    renderMembers();
+    renderProjects();
+    workspaceListView.classList.add("hidden");
+    workspaceDetailView.classList.remove("hidden");
+  }
+
+  function scheduleWsAutosave() {
+    clearTimeout(wsAutosaveTimer);
+    wsAutosaveTimer = setTimeout(saveWorkspaceFields, 700);
+  }
+
+  async function saveWorkspaceFields() {
+    if (!currentWorkspace) return;
+    const title = wsTitleInput.value.trim();
+    if (!title) return; // don't autosave an empty required title; user is mid-edit
+    try {
+      const updated = await apiFetch(`/workspaces/${currentWorkspace.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ title, target: wsTargetInput.value.trim(), description: wsDescriptionInput.value.trim() }),
+      });
+      currentWorkspace = { ...currentWorkspace, ...updated };
+      wsSaveError.classList.add("hidden");
+    } catch (e) {
+      wsSaveError.textContent = e.message;
+      wsSaveError.classList.remove("hidden");
+    }
+  }
+
+  [wsTitleInput, wsTargetInput, wsDescriptionInput].forEach((el) => {
+    el.addEventListener("input", scheduleWsAutosave);
+    el.addEventListener("blur", saveWorkspaceFields);
+  });
+
+  document.getElementById("deleteWsBtn").addEventListener("click", () => {
+    if (!currentWorkspace) return;
+    openConfirmModal(
+      "Delete this workspace?",
+      `"${currentWorkspace.title}" and all of its projects will be permanently deleted.`,
+      async (appKey) => {
+        await apiFetch(`/workspaces/${currentWorkspace.id}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
+        currentWorkspace = null;
+        workspaceDetailView.classList.add("hidden");
+        workspaceListView.classList.remove("hidden");
+        await loadWorkspaces();
+      }
+    );
+  });
+
+  // ---------- members ----------
+
+  const membersList = document.getElementById("membersList");
+  const membersEmptyState = document.getElementById("membersEmptyState");
+
+  function renderMembers() {
+    membersList.innerHTML = "";
+    const members = currentWorkspace.members || [];
+    membersEmptyState.classList.toggle("hidden", members.length > 0);
+    for (const m of members) {
+      const row = document.createElement("div");
+      row.className = "member-row";
+      row.innerHTML = `<span>${escapeHtml(m.email)}</span>`;
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "danger-btn";
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", () => {
+        openConfirmModal(
+          "Remove this team member?",
+          `${m.email} will be removed from "${currentWorkspace.title}" and notified by email.`,
+          async (appKey) => {
+            await apiFetch(`/workspaces/${currentWorkspace.id}/members/${m.id}`, { method: "DELETE" });
+            currentWorkspace.members = currentWorkspace.members.filter((x) => x.id !== m.id);
+            renderMembers();
+          }
+        );
+      });
+      row.appendChild(removeBtn);
+      membersList.appendChild(row);
+    }
+  }
+
+  document.getElementById("addMemberBtn").addEventListener("click", async () => {
+    const errorEl = document.getElementById("addMemberError");
+    errorEl.classList.add("hidden");
+    const emailInput = document.getElementById("newMemberEmail");
+    const email = emailInput.value.trim();
+    try {
+      const member = await apiFetch(`/workspaces/${currentWorkspace.id}/members`, { method: "POST", body: JSON.stringify({ email }) });
+      currentWorkspace.members.push(member);
+      emailInput.value = "";
+      renderMembers();
+    } catch (e) {
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
+    }
+  });
+
+  // ---------- projects ----------
+
+  const projectsList = document.getElementById("projectsList");
+  const projectsEmptyState = document.getElementById("projectsEmptyState");
+  const newProjTechStack = document.getElementById("newProjTechStack");
+
+  function techStackFieldsHtml(idPrefix, values) {
+    values = values || {};
+    let html = "";
+    for (const key of Object.keys(techStackCategories)) {
+      const meta = techStackCategories[key];
+      const required = meta.required ? ' <span class="required-mark">*</span>' : "";
+      const val = values[key] || "";
+      html += `
+        <div class="field">
+          <label for="${idPrefix}-${key}">${escapeHtml(meta.label)}${required}</label>
+          <input id="${idPrefix}-${key}" data-tech-key="${key}" value="${escapeHtml(val)}" />
+        </div>
+      `;
+    }
+    return html;
+  }
+
+  function readTechStackFields(idPrefix) {
+    const result = {};
+    for (const key of Object.keys(techStackCategories)) {
+      const el = document.getElementById(`${idPrefix}-${key}`);
+      result[key] = el ? el.value.trim() : "";
+    }
+    return result;
+  }
+
+  function renderNewProjectForm() {
+    newProjTechStack.innerHTML = techStackFieldsHtml("new-proj", {});
+  }
+
+  function stackSummary(techStack) {
+    const parts = [];
+    if (techStack.ai_services) parts.push(techStack.ai_services);
+    if (techStack.ai_model) parts.push(techStack.ai_model);
+    return parts.join(" · ");
+  }
+
+  function renderProjects() {
+    projectsList.innerHTML = "";
+    const projects = currentWorkspace.projects || [];
+    projectsEmptyState.classList.toggle("hidden", projects.length > 0);
+    for (const p of projects) {
+      const row = document.createElement("div");
+      row.className = "project-row";
+      row.innerHTML = `
+        <div class="project-summary">
+          <div>
+            <b>${escapeHtml(p.title)}</b>
+            <div class="stack-chip">${escapeHtml(stackSummary(p.tech_stack))}</div>
+          </div>
+          <span class="link-btn">Edit ▾</span>
+        </div>
+      `;
+      const body = document.createElement("div");
+      body.className = "project-body hidden";
+      const idPrefix = `proj-${p.id}`;
+      body.innerHTML = `
+        <div class="field">
+          <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
+          <input id="${idPrefix}-title" value="${escapeHtml(p.title)}" />
+        </div>
+        <div class="field">
+          <label for="${idPrefix}-description">Description</label>
+          <textarea id="${idPrefix}-description">${escapeHtml(p.description)}</textarea>
+        </div>
+        <div class="tech-grid" id="${idPrefix}-stack"></div>
+        <div class="row">
+          <div><button type="button" class="save-project-btn" style="width:100%;">Save</button></div>
+          <div style="flex:0;"><button type="button" class="danger-btn delete-project-btn">Delete</button></div>
+        </div>
+        <div class="error hidden save-project-error"></div>
+        <div class="tab-note">
+          AIRI tool tabs, dashboard, notes, actions/report, and comparison for this project arrive in
+          the next phase.
+        </div>
+      `;
+      row.querySelector(".project-summary").addEventListener("click", () => {
+        body.classList.toggle("hidden");
+      });
+      row.appendChild(body);
+      projectsList.appendChild(row);
+
+      document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack);
+
+      const saveErrorEl = body.querySelector(".save-project-error");
+      body.querySelector(".save-project-btn").addEventListener("click", async () => {
+        saveErrorEl.classList.add("hidden");
+        const payload = {
+          title: document.getElementById(`${idPrefix}-title`).value.trim(),
+          description: document.getElementById(`${idPrefix}-description`).value.trim(),
+          tech_stack: readTechStackFields(idPrefix),
+        };
+        try {
+          const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
+          Object.assign(p, updated);
+          renderProjects();
+        } catch (e) {
+          saveErrorEl.textContent = e.message;
+          saveErrorEl.classList.remove("hidden");
+        }
+      });
+
+      body.querySelector(".delete-project-btn").addEventListener("click", () => {
+        openConfirmModal(
+          "Delete this project?",
+          `"${p.title}" will be permanently deleted.`,
+          async (appKey) => {
+            await apiFetch(`/projects/${p.id}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
+            currentWorkspace.projects = currentWorkspace.projects.filter((x) => x.id !== p.id);
+            renderProjects();
+          }
+        );
+      });
+    }
+  }
+
+  document.getElementById("createProjectBtn").addEventListener("click", async () => {
+    const errorEl = document.getElementById("createProjectError");
+    errorEl.classList.add("hidden");
+    const payload = {
+      title: document.getElementById("newProjTitle").value.trim(),
+      description: document.getElementById("newProjDescription").value.trim(),
+      tech_stack: readTechStackFields("new-proj"),
+    };
+    try {
+      const project = await apiFetch(`/workspaces/${currentWorkspace.id}/projects`, { method: "POST", body: JSON.stringify(payload) });
+      currentWorkspace.projects.push(project);
+      document.getElementById("newProjTitle").value = "";
+      document.getElementById("newProjDescription").value = "";
+      renderNewProjectForm();
+      renderProjects();
+    } catch (e) {
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
+    }
+  });
+
+  // ---------- bootstrap ----------
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str == null ? "" : String(str);
+    return div.innerHTML;
+  }
+
+  async function enterApp() {
+    signInView.classList.add("hidden");
+    appView.classList.remove("hidden");
+    document.getElementById("authEmailLabel").textContent = `Signed in as ${authEmail}`;
+
+    techStackCategories = await apiFetch("/projects/tech-stack-categories").catch(() => ({}));
+    renderNewProjectForm();
+
+    const profile = await apiFetch("/profile").catch(() => ({ has_app_key: false }));
+    hasAppKey = !!profile.has_app_key;
+    renderAppKeyStatus();
+
+    await loadWorkspaces();
+  }
+
+  async function init() {
+    if (!authToken) {
+      signInView.classList.remove("hidden");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+      if (!res.ok) throw new Error("expired");
+      const data = await res.json();
+      authEmail = data.email;
+      localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      await enterApp();
+    } catch (e) {
+      signOut();
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

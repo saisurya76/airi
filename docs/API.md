@@ -519,6 +519,32 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
+## Workspaces & projects (Phase 1)
+
+See [docs/WORKSPACES.md](WORKSPACES.md) for the full concept, schema,
+and design rationale (the app-key delete-confirmation PIN, tech-stack
+categories). All endpoints below require
+`Authorization: Bearer <session token>` (from `POST /auth/verify-code`
+— the same sign-in `/analyze/exact` uses) and `401` without one. A
+workspace/project id belonging to another user returns `404`, same as
+one that doesn't exist.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /profile` | `{"has_app_key": bool}` — never the key or its hash |
+| `POST /profile/app-key` | Body `{"app_key": "1234"}` (exactly 4 digits) — sets/changes it; `400` if malformed |
+| `GET /workspaces` | Every workspace this user owns, with `member_count`/`project_count` |
+| `POST /workspaces` | Body `{"title", "target", "description"}` (`title` required) |
+| `GET /workspaces/{id}` | Full detail incl. `members` and `projects` arrays — one call to restore everything on login |
+| `PUT /workspaces/{id}` | Same body as create — full replace of the three fields |
+| `DELETE /workspaces/{id}` | Body `{"app_key": "1234"}` — cascades to members/projects; `400` if the key is wrong or never set |
+| `POST /workspaces/{id}/members` | Body `{"email": "..."}` — `409` if already a member; sends a notification email (best-effort) |
+| `DELETE /workspaces/{id}/members/{member_id}` | Sends a removal notification email the same way |
+| `GET /projects/tech-stack-categories` | Public — the tech-stack category table (label + required/optional) |
+| `POST /workspaces/{id}/projects` | Body `{"title", "description", "tech_stack": {...}}` — `400` if `title` is blank or `tech_stack` is missing `ai_services`/`ai_model` |
+| `GET /projects/{id}` / `PUT /projects/{id}` | Same shape as create |
+| `DELETE /projects/{id}` | Body `{"app_key": "1234"}`, same gate as deleting a workspace |
+
 ## `GET /download`
 
 Unauthenticated. Returns a zip (`airi-source.zip`) of AIRI's own
