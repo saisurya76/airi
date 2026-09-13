@@ -1,12 +1,14 @@
-# Workspaces & Projects (Phase 1)
+# Workspaces & Projects (Phases 1–3)
 
 `frontend/workspaces.html` lets a signed-in user organize their work
 into **workspaces** (a team/initiative) containing **projects** (a
 specific thing being analyzed), instead of using AIRI's tools as a
-one-off calculator every time. This is **Phase 1 of a multi-phase
-plan** — it ships the data model, the CRUD, and full restore-on-login,
-but not yet the tabbed per-project tool integration. See "What's next"
-at the bottom for exactly what's deferred and why.
+one-off calculator every time. This is a **multi-phase plan**: Phase 1
+shipped the data model, CRUD, and full restore-on-login; Phase 2 made
+AIRI's tools runnable and saved inside a project; Phase 3 (this
+delivery) adds a Dashboard tab, a Notes tab, and an Actions tab with a
+downloadable consolidated PDF report. See "What's next" at the bottom
+for what's still deferred and why.
 
 Like Exact mode, this entire feature requires a signed-in session
 (email + OTP — see [docs/EXACT_MODE.md](EXACT_MODE.md)). It doesn't
@@ -190,24 +192,94 @@ Deleting a project cascades to its saved tool runs
 (`ON DELETE CASCADE`), same as it already cascades to nothing else at
 this level (members/projects cascade from workspaces, not from here).
 
+## Dashboard, Notes & Actions (Phase 3)
+
+Three more tabs on every project, all built directly on top of the
+`project_tool_runs` history Phase 2 introduced:
+
+- **Dashboard** — charts/figures rolled up across *every saved run in
+  every tool tab*: a donut chart of saved-run counts by tool, a bar
+  chart of estimated cost by tool, stat tiles (total saved runs, total
+  estimated tokens, total estimated cost), and a SAFE/WARNING/EXCEEDED
+  status-mix bar chart. It's plain inline SVG/CSS — no charting library
+  — matching the rest of the app's dependency-free frontend. It
+  re-fetches automatically the first time it's opened, and again right
+  after any tool tab in the same project finishes a run, so it never
+  shows stale numbers for a project you're actively working in.
+- **Notes** — an append-only, timestamped comment history
+  (`project_notes`, `sql/005_project_notes.sql`; validation in
+  `airi/notes.py`). Add a note, and it joins a read-only list, most
+  recent first; clicking an entry expands it in place to show the full
+  text (the same expand-in-place pattern the tool-run history already
+  uses). The only mutation is delete — gated by the same app-key
+  confirmation as everything else destructive in this feature. There's
+  no edit: a note is a timestamped entry in a history, not a document
+  you revise.
+- **Actions** — an on-screen consolidated summary (totals, a per-tool
+  breakdown table, notes count) plus a **"Download consolidated report
+  (PDF)"** button.
+
+### The consolidated report: one aggregation, two views
+
+`airi/consolidated_report.py` is pure logic that rolls up a project's
+*entire* saved history (every tool run, not just the latest) plus its
+notes into one shape — normalizing each tool's very different result
+fields (`estimated_cost` vs `total_cost`, a real SAFE/WARNING/EXCEEDED
+split for analyze/exact/report vs. just an `any_exceeded` flag for
+traffic projections) into a common `{cost, tokens, status_counts}` per
+run, then summing. The Actions tab's on-screen JSON
+(`GET /projects/{id}/report/consolidated`) and its PDF
+(`GET /projects/{id}/report/consolidated.pdf`, via the same
+`xhtml2pdf` pipeline `/report/pdf` already uses) are both built from
+this one aggregation — `api.py`'s `_build_consolidated_report` — so
+they can never silently disagree. This is the same reasoning as
+`report.py`/`report_render.py` for the standalone Load-test report.
+
+**"Signed by the user who initiates/creates the project"**: today, the
+only user who can ever reach a project *is* the workspace owner — real
+team collaboration (a member getting their own access, not just an
+email notification) hasn't shipped yet — so the signed-in session's own
+email is, by construction, the project's creator. The PDF's "Prepared
+by" line uses that email directly; there's no separate name field to
+pull from (the `users` table only ever stores an email — see
+`sql/001_auth_schema.sql`). This will need a real per-project creator
+lookup once team collaboration ships and a project can be opened by
+someone other than the person who created it.
+
+One rough edge, worth calling out: the consolidated totals sum cost
+across all four tools even though a Load-test report run is *itself*
+already an aggregate over many synthetic requests. Treat the grand
+total as an order-of-magnitude combined figure across everything saved
+in a project, not a literal sum of independent charges.
+
+### API reference (Phase 3)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /projects/{id}/notes` | Body `{"body": "..."}` (1–5000 chars after trimming). Creates one note. |
+| `GET /projects/{id}/notes` | This project's notes, most recent first. |
+| `DELETE /projects/{id}/notes/{note_id}` | Body `{"app_key": "1234"}` — same delete-confirmation gate as everything else. |
+| `GET /projects/{id}/report/consolidated` | The Actions/Dashboard tabs' aggregation as JSON: `project`, `prepared_by`, `generated_at`, `totals`, `by_tool`, `latest` (latest saved run per tool, or `null`), `notes`. |
+| `GET /projects/{id}/report/consolidated.pdf` | The same data, rendered to a downloadable PDF. |
+
+Notes cascade-delete with their project (`ON DELETE CASCADE`), same as
+saved tool runs.
+
 ## What's next (later phases — not in this delivery)
 
 Per the plan agreed before building this: Phase 1 shipped the data
-model, CRUD, and restore-on-login; Phase 2 (above) made AIRI's tools
-runnable and saved inside a project. Still to come, in roughly this
-order:
+model, CRUD, and restore-on-login; Phase 2 made AIRI's tools runnable
+and saved inside a project; Phase 3 (above) added the Dashboard, Notes,
+and Actions tabs. Still to come:
 
-1. **Dashboard tab** — charts/figures built from the saved tool runs
-   Phase 2 now produces.
-2. **Notes tab** — an append-only, timestamped comment history per
-   project (read-only list, click an entry to preview it in full).
-3. **Actions tab** — a consolidated findings report per project.
-4. **Comparison tab** — appears once a workspace has 2+ projects,
+1. **Comparison tab** — appears once a workspace has 2+ projects,
    auto-updating in the background as tool runs are saved.
-5. **PDF reports** — per-tab, consolidated-per-project, and
-   comparison-level, each signed by the user who created the
-   project/workspace (their name/email — not the site's Author/founder
-   profile, which is a separate, unrelated page).
-6. **Workspace-level reporting** and **real team collaboration**
+2. **Per-tab PDF downloads** and a **comparison-level PDF report** —
+   Phase 3 shipped the consolidated-per-project report; downloading a
+   single tab's result on its own, and a cross-project comparison
+   report, are deferred to land alongside the comparison tab.
+3. **Workspace-level reporting** and **real team collaboration**
    (a member actually signing in and seeing the workspace, rather than
-   just being notified) are open design questions for a later phase.
+   just being notified) are open design questions for a later phase —
+   the latter is also what the consolidated report's "prepared by"
+   simplification (see above) is waiting on.

@@ -409,3 +409,44 @@ def delete_tool_run(run_id: int) -> bool:
     with _cursor() as cur:
         cur.execute("DELETE FROM project_tool_runs WHERE id = %s", (run_id,))
         return cur.rowcount > 0
+
+
+# ---------- project_notes (workspaces feature, Phase 3) ----------
+
+_NOTE_FIELDS = "id, project_id, body, created_at"
+
+
+def create_note(project_id: int, body: str) -> dict:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO project_notes (project_id, body)
+            VALUES (%s, %s)
+            RETURNING {_NOTE_FIELDS}
+            """,
+            (project_id, body),
+        )
+        return cur.fetchone()
+
+
+def list_notes(project_id: int) -> List[dict]:
+    """Most recent first — matches the spec's "readonly list, most recent
+    comment first" framing."""
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT {_NOTE_FIELDS} FROM project_notes WHERE project_id = %s ORDER BY created_at DESC",
+            (project_id,),
+        )
+        return cur.fetchall()
+
+
+def get_note(note_id: int) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(f"SELECT {_NOTE_FIELDS} FROM project_notes WHERE id = %s", (note_id,))
+        return cur.fetchone()
+
+
+def delete_note(note_id: int) -> bool:
+    with _cursor() as cur:
+        cur.execute("DELETE FROM project_notes WHERE id = %s", (note_id,))
+        return cur.rowcount > 0

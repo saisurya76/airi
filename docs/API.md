@@ -519,7 +519,7 @@ Exact-mode session token — `airi/auth.py` rejects either type outright
 if presented as the other, even though both are HS256-signed with the
 same `AUTH_SECRET`.
 
-## Workspaces & projects (Phase 1 + 2)
+## Workspaces & projects (Phases 1–3)
 
 See [docs/WORKSPACES.md](WORKSPACES.md) for the full concept, schema,
 and design rationale (the app-key delete-confirmation PIN, tech-stack
@@ -550,9 +550,17 @@ one that doesn't exist.
 | `POST /projects/{id}/tools/report/runs` | Same body as `POST /report` + optional `label` |
 | `GET /projects/{id}/tools/{tool}/runs` | That tool's saved runs, most recent first (`tool`: `analyze`/`exact`/`project`/`report`, else `422`) |
 | `DELETE /projects/{id}/tools/{tool}/runs/{run_id}` | Body `{"app_key": "1234"}`, same delete gate |
+| `POST /projects/{id}/notes` | Body `{"body": "..."}` (1–5000 chars after trimming) — creates one note; `400` if blank/too long |
+| `GET /projects/{id}/notes` | This project's notes, most recent first |
+| `DELETE /projects/{id}/notes/{note_id}` | Body `{"app_key": "1234"}`, same delete gate |
+| `GET /projects/{id}/report/consolidated` | Aggregated totals/by-tool/latest-run/notes across the whole project, as JSON — backs the Dashboard and Actions tabs |
+| `GET /projects/{id}/report/consolidated.pdf` | The same aggregation, rendered to a downloadable PDF, signed with the session's own email |
 
 See [docs/WORKSPACES.md](WORKSPACES.md#tool-runs-phase-2-airis-tools-inside-a-project)
-for what gets stored, and why a BYOK key never does.
+for what gets stored, and why a BYOK key never does, and
+[docs/WORKSPACES.md](WORKSPACES.md#dashboard-notes--actions-phase-3)
+for the Phase 3 tabs (Dashboard/Notes/Actions) and the consolidated
+report.
 
 ## `GET /download`
 

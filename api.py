@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, db, runtime_config, tool_runs, workspaces as ws
+from airi import author, consolidated_report, db, notes, runtime_config, tool_runs, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -316,6 +316,10 @@ class ProjectBody(BaseModel):
     title: str = ""
     description: str = ""
     tech_stack: Dict[str, str] = Field(default_factory=dict)
+
+
+class NoteBody(BaseModel):
+    body: str = ""
 
 
 class ArchetypeRequest(BaseModel):
@@ -798,6 +802,108 @@ def delete_project_tool_run(project_id: int, tool: tool_runs.ToolName, run_id: i
     _require_app_key_confirmed(user_id, body.app_key)
     db.delete_tool_run(run_id)
     return {"deleted": True}
+
+
+# --- Notes / comments history inside a project (Phase 3) ---
+#
+# An append-only history, not an editable document: the only mutation is
+# delete (app-key gated, same as everywhere else in this feature). See
+# docs/WORKSPACES.md and airi/notes.py.
+
+
+@app.post("/projects/{project_id}/notes")
+def create_project_note(project_id: int, body: NoteBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    try:
+        note_body = notes.validate_note_body(body.body)
+    except notes.NoteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return db.create_note(project_id, note_body)
+
+
+@app.get("/projects/{project_id}/notes")
+def list_project_notes(project_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    return db.list_notes(project_id)
+
+
+@app.delete("/projects/{project_id}/notes/{note_id}")
+def delete_project_note(project_id: int, note_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_owned_project(project_id, user_id)
+    note = db.get_note(note_id)
+    if note is None or note["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Note not found.")
+    _require_app_key_confirmed(user_id, body.app_key)
+    db.delete_note(note_id)
+    return {"deleted": True}
+
+
+# --- Dashboard + consolidated report (Phase 3) ---
+#
+# One aggregation function backs both the Actions tab's on-screen JSON
+# summary and its downloadable PDF, so the two can never silently
+# disagree — same reasoning as _build_report_or_400 / render_report_html
+# for the standalone Load-test report. See airi/consolidated_report.py.
+#
+# "Prepared by": today, the only user who can ever reach a project is the
+# workspace's owner (there's no real team collaboration yet — members are
+# notified by email but don't get their own access, see
+# docs/WORKSPACES.md) — so the signed-in session's own email *is* the
+# project's creator. This will need a real per-project creator lookup
+# once team collaboration ships in a later phase.
+
+
+def _build_consolidated_report(project_id: int, user_id: int, email: str) -> Dict[str, Any]:
+    proj, _workspace = _get_owned_project(project_id, user_id)
+    runs_by_tool = {t.value: db.list_tool_runs(project_id, t.value) for t in tool_runs.ToolName}
+    all_runs = [r for runs in runs_by_tool.values() for r in runs]
+    totals = consolidated_report.aggregate_totals(all_runs)
+    by_tool = consolidated_report.aggregate_by_tool(runs_by_tool)
+    latest = consolidated_report.latest_per_tool(runs_by_tool)
+    return {
+        "project": proj,
+        "prepared_by": email,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "totals": totals,
+        "by_tool": by_tool,
+        "latest": latest,
+        "notes": db.list_notes(project_id),
+    }
+
+
+@app.get("/projects/{project_id}/report/consolidated")
+def get_consolidated_report(project_id: int, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    return _build_consolidated_report(project_id, user_id, email)
+
+
+@app.get("/projects/{project_id}/report/consolidated.pdf")
+def get_consolidated_report_pdf(project_id: int, authorization: Optional[str] = Header(default=None)):
+    email, user_id = _require_session_email_and_user_id(authorization)
+    data = _build_consolidated_report(project_id, user_id, email)
+
+    html = consolidated_report.render_consolidated_report_html(
+        data["project"], data["prepared_by"], data["generated_at"],
+        data["totals"], data["by_tool"], data["latest"], data["notes"],
+    )
+
+    from xhtml2pdf import pisa  # imported here: only this endpoint needs it (matches /report/pdf)
+
+    buffer = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buffer)
+    if result.err:
+        raise HTTPException(status_code=500, detail="Could not render the consolidated report PDF.")
+
+    pdf_bytes = buffer.getvalue()
+    filename = "".join(c if c.isalnum() or c in "-_ " else "_" for c in data["project"]["title"]).strip() or "airi-project"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-consolidated-report.pdf"'},
+    )
 
 
 def _resolve_exact_api_key(body: "ExactAnalyzeRequest", provider: str, test_mode: bool) -> str:

@@ -177,6 +177,17 @@
   table.tool-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
   .history-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; width: 100%; }
   .history-entry { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+  .chart-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+  .chart-card { flex: 1 1 260px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 10px; font-weight: 600; }
+  .chart-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+  .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+  .bar-chart { display: flex; flex-direction: column; gap: 10px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
+  .bar-label { min-width: 70px; color: var(--muted); }
+  .bar-track { flex: 1 1 100px; background: #0f1115; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; height: 14px; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-value { min-width: 70px; text-align: right; }
   .tab-note {
     color: var(--muted);
     font-size: 12px;
@@ -358,9 +369,10 @@
 
           <div class="tab-note">
             Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
-            report tools inside it — every run is saved to that project's history. A dashboard, a
-            notes history, a consolidated actions/report tab, and a cross-project comparison view
-            are on the way in later phases.
+            report tools inside it — every run is saved to that project's history. Each project also
+            gets a Dashboard (charts across all saved runs), a Notes tab (a timestamped comment
+            history), and an Actions tab (a downloadable, signed consolidated report). A cross-project
+            comparison view is on the way in a later phase.
           </div>
         </div>
       </div>
@@ -411,6 +423,14 @@
   // handling as index.html.
   const BYOK_ANTHROPIC_KEY = "airi_byok_anthropic_key";
   const BYOK_GOOGLE_KEY = "airi_byok_google_key";
+
+  // Shared by the Dashboard and Actions tabs (Phase 3) — same tool
+  // labels/order as airi/consolidated_report.py's TOOL_LABELS/TOOL_ORDER,
+  // so the on-screen names match the PDF.
+  const TOOL_ORDER = ["analyze", "exact", "project", "report"];
+  const TOOL_LABELS = { analyze: "Standard analyze", exact: "Exact mode", project: "Traffic projection", report: "Load-test report" };
+  const TOOL_CHART_COLORS = { analyze: "#6ea8fe", exact: "#9b7ef2", project: "#3ecf8e", report: "#f2b84b" };
+  const STATUS_CHART_COLORS = { SAFE: "#3ecf8e", WARNING: "#f2b84b", EXCEEDED: "#f2555a" };
 
   function modelOptionsHtml(selected) {
     const list = modelsData.length ? modelsData : [{ id: "gpt-4o", context_window: 128000 }];
@@ -851,6 +871,9 @@
           <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
           <button type="button" class="proj-tab-btn" data-tab="project">Traffic</button>
           <button type="button" class="proj-tab-btn" data-tab="report">Load Test</button>
+          <button type="button" class="proj-tab-btn" data-tab="dashboard">Dashboard</button>
+          <button type="button" class="proj-tab-btn" data-tab="notes">Notes</button>
+          <button type="button" class="proj-tab-btn" data-tab="actions">Actions</button>
         </div>
         <div class="proj-tab-panel" data-panel="details">
           <div class="field">
@@ -872,6 +895,9 @@
         <div class="proj-tab-panel hidden" data-panel="exact"></div>
         <div class="proj-tab-panel hidden" data-panel="project"></div>
         <div class="proj-tab-panel hidden" data-panel="report"></div>
+        <div class="proj-tab-panel hidden" data-panel="dashboard"></div>
+        <div class="proj-tab-panel hidden" data-panel="notes"></div>
+        <div class="proj-tab-panel hidden" data-panel="actions"></div>
       `;
       row.querySelector(".project-summary").addEventListener("click", () => {
         body.classList.toggle("hidden");
@@ -922,7 +948,10 @@
             const panel = body.querySelector(`.proj-tab-panel[data-panel="${tab}"]`);
             if (!panel.dataset.rendered) {
               panel.dataset.rendered = "1";
-              renderToolPanel(tab, p, panel);
+              if (tab === "dashboard") renderDashboardPanel(p, panel);
+              else if (tab === "notes") renderNotesPanel(p, panel);
+              else if (tab === "actions") renderActionsPanel(p, panel);
+              else renderToolPanel(tab, p, panel);
             }
           }
         });
@@ -1058,6 +1087,7 @@
             async (appKey) => {
               await apiFetch(`/projects/${project.id}/tools/${tool}/runs/${runId}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
               await loadToolHistory(tool, project, idPrefix);
+              maybeRefreshDashboard(rowEl, project);
             }
           );
         });
@@ -1105,6 +1135,241 @@
     `);
   }
 
+  // ---------- Phase 3: Dashboard / Notes / Actions tabs ----------
+
+  function donutChartSvg(items) {
+    const total = items.reduce((s, i) => s + i.value, 0);
+    const size = 150, r = 55, cx = size / 2, cy = size / 2, strokeWidth = 22;
+    const circumference = 2 * Math.PI * r;
+    let offset = 0;
+    let segments;
+    if (total <= 0) {
+      segments = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${strokeWidth}" />`;
+    } else {
+      segments = items.filter((i) => i.value > 0).map((item) => {
+        const frac = item.value / total;
+        const dash = frac * circumference;
+        const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${item.color}" stroke-width="${strokeWidth}" stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" />`;
+        offset += dash;
+        return seg;
+      }).join("");
+    }
+    const legend = items.map((i) => `<div><span class="legend-dot" style="background:${i.color};"></span>${escapeHtml(i.label)}: ${i.value.toLocaleString()}</div>`).join("");
+    return `
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${segments}</svg>
+        <div class="chart-legend">${legend}</div>
+      </div>`;
+  }
+
+  function barChartSvg(items, fmt) {
+    const max = Math.max(1, ...items.map((i) => i.value));
+    const rows = items.map((item) => {
+      const pct = item.value > 0 ? Math.max(2, (item.value / max) * 100) : 0;
+      return `
+        <div class="bar-row">
+          <div class="bar-label">${escapeHtml(item.label)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${item.color};"></div></div>
+          <div class="bar-value">${fmt(item.value)}</div>
+        </div>`;
+    }).join("");
+    return `<div class="bar-chart">${rows}</div>`;
+  }
+
+  async function renderDashboardPanel(project, panelEl) {
+    panelEl.innerHTML = `<div class="empty-state">Loading dashboard…</div>`;
+    try {
+      const data = await apiFetch(`/projects/${project.id}/report/consolidated`);
+      panelEl.innerHTML = dashboardHtml(data);
+    } catch (e) {
+      panelEl.innerHTML = `<div class="empty-state">Could not load the dashboard: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function dashboardHtml(data) {
+    const { totals, by_tool } = data;
+    return `
+      <p class="sub" style="margin:0 0 6px;">Rolls up every saved run across this project's tool tabs — reopen this tab any time to see the latest.</p>
+      <div class="result-grid">
+        <div class="stat"><div class="label">Total saved runs</div><div class="value">${totals.total_runs.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total estimated tokens</div><div class="value">${totals.total_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total estimated cost</div><div class="value">$${totals.total_cost.toFixed(4)}</div></div>
+        <div class="stat"><div class="label">Status mix</div><div class="value">${statusBadgeHtml("SAFE")} ${totals.status_counts.SAFE} &nbsp;${statusBadgeHtml("WARNING")} ${totals.status_counts.WARNING} &nbsp;${statusBadgeHtml("EXCEEDED")} ${totals.status_counts.EXCEEDED}</div></div>
+      </div>
+      <div class="chart-row">
+        <div class="chart-card">
+          <div class="chart-title">Saved runs by tool</div>
+          ${donutChartSvg(TOOL_ORDER.map((t) => ({ label: TOOL_LABELS[t], value: (by_tool[t] && by_tool[t].count) || 0, color: TOOL_CHART_COLORS[t] })))}
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Estimated cost by tool</div>
+          ${barChartSvg(TOOL_ORDER.map((t) => ({ label: TOOL_LABELS[t], value: (by_tool[t] && by_tool[t].cost) || 0, color: TOOL_CHART_COLORS[t] })), (v) => `$${v.toFixed(4)}`)}
+        </div>
+      </div>
+      <div class="chart-row">
+        <div class="chart-card" style="flex:1 1 100%;">
+          <div class="chart-title">Status breakdown across all saved runs</div>
+          ${barChartSvg(["SAFE", "WARNING", "EXCEEDED"].map((s) => ({ label: s, value: totals.status_counts[s] || 0, color: STATUS_CHART_COLORS[s] })), (v) => v.toLocaleString())}
+        </div>
+      </div>
+    `;
+  }
+
+  function maybeRefreshDashboard(panelEl, project) {
+    const container = panelEl.closest(".project-body");
+    if (!container) return;
+    const dashPanel = container.querySelector('.proj-tab-panel[data-panel="dashboard"]');
+    if (dashPanel && dashPanel.dataset.rendered) renderDashboardPanel(project, dashPanel);
+  }
+
+  async function renderNotesPanel(project, panelEl) {
+    const idPrefix = `proj-${project.id}-notes`;
+    panelEl.innerHTML = `
+      <div class="field"><label for="${idPrefix}-input">Add a note</label><textarea id="${idPrefix}-input" placeholder="A comment or finding to record..."></textarea></div>
+      <div class="row"><div><button type="button" id="${idPrefix}-add-btn" style="width:100%;">Add note</button></div></div>
+      <div class="error hidden" id="${idPrefix}-error"></div>
+      <h3 style="margin-top:18px;">Notes history</h3>
+      <div id="${idPrefix}-list"></div>
+    `;
+    document.getElementById(`${idPrefix}-add-btn`).addEventListener("click", async () => {
+      const errorEl = document.getElementById(`${idPrefix}-error`);
+      errorEl.classList.add("hidden");
+      const input = document.getElementById(`${idPrefix}-input`);
+      const bodyText = input.value.trim();
+      if (!bodyText) { errorEl.textContent = "Write something first."; errorEl.classList.remove("hidden"); return; }
+      try {
+        await apiFetch(`/projects/${project.id}/notes`, { method: "POST", body: JSON.stringify({ body: bodyText }) });
+        input.value = "";
+        await loadNotes(project, idPrefix);
+      } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      }
+    });
+    await loadNotes(project, idPrefix);
+  }
+
+  async function loadNotes(project, idPrefix) {
+    const listEl = document.getElementById(`${idPrefix}-list`);
+    listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+    try {
+      const noteRows = await apiFetch(`/projects/${project.id}/notes`);
+      renderNotesList(project, idPrefix, noteRows);
+    } catch (e) {
+      listEl.innerHTML = `<div class="empty-state">Could not load notes.</div>`;
+    }
+  }
+
+  function renderNotesList(project, idPrefix, noteRows) {
+    const listEl = document.getElementById(`${idPrefix}-list`);
+    if (!noteRows.length) {
+      listEl.innerHTML = `<div class="empty-state">No notes yet — add one above.</div>`;
+      return;
+    }
+    listEl.innerHTML = noteRows.map((n) => {
+      const preview = n.body.length > 100 ? `${n.body.slice(0, 100)}…` : n.body;
+      return `
+      <div class="history-entry" data-note-id="${n.id}">
+        <div class="history-summary">
+          <span><span class="stack-chip">${new Date(n.created_at).toLocaleString()}</span> ${escapeHtml(preview)}</span>
+          <span class="link-btn">Preview ▾</span>
+        </div>
+        <div class="history-detail hidden" style="margin-top:10px;"></div>
+      </div>`;
+    }).join("");
+
+    listEl.querySelectorAll("[data-note-id]").forEach((rowEl) => {
+      const noteId = Number(rowEl.dataset.noteId);
+      const note = noteRows.find((n) => n.id === noteId);
+      const detailEl = rowEl.querySelector(".history-detail");
+      rowEl.querySelector(".history-summary").addEventListener("click", () => {
+        detailEl.classList.toggle("hidden");
+        if (detailEl.dataset.rendered) return;
+        detailEl.dataset.rendered = "1";
+        detailEl.innerHTML = `
+          <div style="white-space:pre-wrap;">${escapeHtml(note.body)}</div>
+          <button type="button" class="danger-btn delete-note-btn" style="margin-top:10px;">Delete this note</button>
+        `;
+        detailEl.querySelector(".delete-note-btn").addEventListener("click", () => {
+          openConfirmModal(
+            "Delete this note?",
+            "This note will be permanently deleted.",
+            async (appKey) => {
+              await apiFetch(`/projects/${project.id}/notes/${noteId}`, { method: "DELETE", body: JSON.stringify({ app_key: appKey }) });
+              await loadNotes(project, idPrefix);
+            }
+          );
+        });
+      });
+    });
+  }
+
+  async function renderActionsPanel(project, panelEl) {
+    panelEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+    try {
+      const data = await apiFetch(`/projects/${project.id}/report/consolidated`);
+      panelEl.innerHTML = actionsHtml(project, data);
+      document.getElementById(`proj-${project.id}-download-consolidated-btn`).addEventListener("click", () => downloadConsolidatedReport(project));
+    } catch (e) {
+      panelEl.innerHTML = `<div class="empty-state">Could not load: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function actionsHtml(project, data) {
+    const { totals, by_tool, notes: noteRows } = data;
+    const rows = TOOL_ORDER.map((t) => {
+      const d = by_tool[t] || { count: 0, tokens: 0, cost: 0 };
+      return `<tr><td>${TOOL_LABELS[t]}</td><td>${d.count.toLocaleString()}</td><td>${d.tokens.toLocaleString()}</td><td>$${d.cost.toFixed(4)}</td></tr>`;
+    }).join("");
+    return `
+      <p class="sub" style="margin:0 0 10px;">A consolidated view of every tab's saved findings for this project — download it as a PDF, signed with the account that created this project, to share.</p>
+      <div class="result-grid">
+        <div class="stat"><div class="label">Total saved runs</div><div class="value">${totals.total_runs.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total estimated cost</div><div class="value">$${totals.total_cost.toFixed(4)}</div></div>
+        <div class="stat"><div class="label">Notes recorded</div><div class="value">${noteRows.length.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Status mix</div><div class="value">${statusBadgeHtml("SAFE")} ${totals.status_counts.SAFE} &nbsp;${statusBadgeHtml("WARNING")} ${totals.status_counts.WARNING} &nbsp;${statusBadgeHtml("EXCEEDED")} ${totals.status_counts.EXCEEDED}</div></div>
+      </div>
+      <table class="tool-table">
+        <thead><tr><th>Tool</th><th>Saved runs</th><th>Tokens</th><th>Cost</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="row" style="margin-top:16px;"><div><button type="button" id="proj-${project.id}-download-consolidated-btn" style="width:100%;">Download consolidated report (PDF)</button></div></div>
+      <div class="error hidden" id="proj-${project.id}-download-error"></div>
+    `;
+  }
+
+  async function downloadConsolidatedReport(project) {
+    const btn = document.getElementById(`proj-${project.id}-download-consolidated-btn`);
+    const errorEl = document.getElementById(`proj-${project.id}-download-error`);
+    errorEl.classList.add("hidden");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Preparing PDF…";
+    try {
+      const res = await fetch(`${API_BASE}/projects/${project.id}/report/consolidated.pdf`, { headers: authHeaders() });
+      if (!res.ok) {
+        let detail = "Could not generate the report.";
+        try { detail = (await res.json()).detail || detail; } catch (e) { /* no JSON body */ }
+        throw new Error(detail);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(project.title || "project").replace(/[^a-zA-Z0-9-_ ]/g, "_")}-consolidated-report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
   function renderToolPanel(tool, project, panelEl) {
     const idPrefix = `proj-${project.id}-${tool}`;
 
@@ -1148,6 +1413,7 @@
           document.getElementById(`${idPrefix}-result`).innerHTML = renderAnalyzeResult(run.result);
           document.getElementById(`${idPrefix}-label`).value = "";
           await loadToolHistory(tool, project, idPrefix);
+          maybeRefreshDashboard(panelEl, project);
         } catch (e) {
           errorEl.textContent = e.message;
           errorEl.classList.remove("hidden");
@@ -1191,6 +1457,7 @@
           document.getElementById(`${idPrefix}-result`).innerHTML = renderProjectResult(run.result);
           document.getElementById(`${idPrefix}-label`).value = "";
           await loadToolHistory(tool, project, idPrefix);
+          maybeRefreshDashboard(panelEl, project);
         } catch (e) {
           errorEl.textContent = e.message;
           errorEl.classList.remove("hidden");
@@ -1253,6 +1520,7 @@
         document.getElementById(`${idPrefix}-result`).innerHTML = renderReportResult(run.result);
         document.getElementById(`${idPrefix}-label`).value = "";
         await loadToolHistory(tool, project, idPrefix);
+        maybeRefreshDashboard(panelEl, project);
       } catch (e) {
         errorEl.textContent = e.message;
         errorEl.classList.remove("hidden");
