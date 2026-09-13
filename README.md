@@ -10,6 +10,17 @@ token estimation library, one API endpoint, and a frontend page to try
 it. See **What was cut** below for what that spec included that this
 build intentionally skips.
 
+## Documentation
+
+- **[docs/INTEGRATION.md](docs/INTEGRATION.md)** — wiring AIRI into your
+  own AI request pipeline as a pre-flight SEND/MODIFY/REJECT check,
+  from Python or any other language over HTTP.
+- **[docs/API.md](docs/API.md)** — full reference for every endpoint
+  (`/analyze`, `/project`, `/models`, `/health`): request/response
+  schemas and error formats.
+- This README covers setup, the API contract at a glance, tokenizer
+  accuracy, and what was cut from the frozen spec and why.
+
 ## Live
 
 - Try-it page: hosted on GitHub Pages from `frontend/` via the workflow in
@@ -68,12 +79,16 @@ airi/                   core library — zero web/db/cloud dependencies
 api.py                  FastAPI: POST /analyze, POST /project, GET /models, GET /health
 frontend/index.html    try-it-out page (vanilla HTML/CSS/JS, no build step)
 tests/                  sanity checks for analyzer.py and projector.py
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration guide)
 ```
 
 The core library never imports FastAPI, and never makes a network call
 that's required for it to function — see "Tokenizer accuracy" below.
 
 ## API contract
+
+At a glance — full reference with `/project` and error formats in
+[docs/API.md](docs/API.md).
 
 `POST /analyze`
 
