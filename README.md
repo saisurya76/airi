@@ -24,7 +24,8 @@ build intentionally skips.
   setup (Neon, Resend, Anthropic/Google keys).
 - **[docs/ADMIN.md](docs/ADMIN.md)** — the password-gated admin page
   (`frontend/admin.html`): the test-mode ↔ BYOK toggle for Exact mode,
-  how it's stored, and the `/config`/`/admin/*` API reference.
+  the founder/author profile shown on `frontend/author.html`, and the
+  `/config`/`/admin/*`/`/author` API reference.
 - This README covers setup, the API contract at a glance, tokenizer
   accuracy, and what was cut from the frozen spec and why.
 
@@ -73,9 +74,9 @@ print(result.to_dict())
 Run the sanity tests any time with `python3 tests/test_analyzer.py`,
 `python3 tests/test_projector.py`, `python3 tests/test_report.py`,
 `python3 tests/test_auth.py`, `python3 tests/test_exact_provider.py`,
-and `python3 tests/test_runtime_config.py`
-(the last two need no database/network — they test pure logic and
-mocked HTTP calls respectively).
+`python3 tests/test_runtime_config.py`, and `python3 tests/test_author.py`
+(the last three need no database/network — they test pure logic and
+mocked HTTP calls).
 
 ## Project layout
 
@@ -94,14 +95,17 @@ airi/                   core library — zero web/db/cloud dependencies
   email_provider.py       API-layer only: sends the OTP email via Resend
   exact_provider.py       API-layer only: real Anthropic/Google token-counting API calls
   runtime_config.py       API-layer only: test-mode/BYOK toggle (env var + admin-page override)
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /download, /models, /health
+  author.py               API-layer only: founder/author profile storage + validation (app_config-backed)
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*, /analyze/exact, /config, /admin/*, /author, /download, /models, /health
 frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
-frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment config checklist
+frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment checklist + author-profile editor
 frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a new scenario ships
 frontend/developers.html  API quick reference + "download the source" button (GET /download)
+frontend/author.html   public founder/about page, built entirely from the admin-edited author profile
+frontend/privacy.html  privacy policy, linked from every page's footer
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
-sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode override)
+sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode + author profile)
 tests/                  sanity checks for every module above
 docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page)
 ```

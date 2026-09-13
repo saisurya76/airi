@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import db, runtime_config
+from airi import author, db, runtime_config
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -185,6 +185,27 @@ class AdminLoginBody(BaseModel):
 
 class AdminConfigBody(BaseModel):
     test_mode: bool
+
+
+class AuthorProfileBody(BaseModel):
+    """All optional/defaulted — a field left out is stored as "" (this
+    is a full replace, same semantics as AdminConfigBody's test_mode;
+    the admin page always sends its whole form, so nothing gets
+    silently wiped). Real validation (length caps, photo shape) happens
+    in airi/author.py, not here — Pydantic just gets the types right."""
+
+    name: str = ""
+    title: str = ""
+    company: str = ""
+    tagline: str = ""
+    bio: str = ""
+    location: str = ""
+    email: str = ""
+    website: str = ""
+    linkedin: str = ""
+    twitter: str = ""
+    github: str = ""
+    photo_data_url: str = ""
 
 
 class ArchetypeRequest(BaseModel):
@@ -418,6 +439,30 @@ def admin_set_config(body: AdminConfigBody, authorization: Optional[str] = Heade
         raise HTTPException(status_code=503, detail=str(exc))
     test_mode, source = runtime_config.get_test_mode()
     return {"test_mode": test_mode, "source": source}
+
+
+@app.get("/author")
+def get_author():
+    """Public, unauthenticated: the founder/author profile shown on
+    frontend/author.html. Returns all-empty defaults if nothing's been
+    set yet (or the database isn't configured) — never a 404 or 503,
+    since the page needs to render a friendly "coming soon" state
+    either way rather than treat this as an error."""
+    return author.get_author_profile()
+
+
+@app.post("/admin/author")
+def admin_set_author(body: AuthorProfileBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only: sets the author profile (frontend/admin.html's
+    "Author profile" panel). A full replace — see AuthorProfileBody."""
+    _require_admin(authorization)
+    try:
+        saved = author.set_author_profile(body.model_dump())
+    except author.AuthorProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return saved
 
 
 @app.post("/analyze/exact")

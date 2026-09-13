@@ -1,12 +1,13 @@
-# Admin page: test mode, BYOK, and what's configured
+# Admin page: test mode, BYOK, deployment config, and the author profile
 
-`frontend/admin.html` is a small password-gated page for one deployment
-setting — whether Exact mode (see [docs/EXACT_MODE.md](EXACT_MODE.md))
-uses AIRI's own shared Anthropic/Gemini keys ("test mode") or requires
-each signed-in user to bring their own key ("BYOK mode") — plus a
-read-only checklist of which secrets this deployment has configured.
-It's for you (or whoever runs this deployment), not for AIRI's regular
-users.
+`frontend/admin.html` is a small password-gated page covering everything
+about *running* this AIRI deployment rather than using it: whether
+Exact mode (see [docs/EXACT_MODE.md](EXACT_MODE.md)) uses AIRI's own
+shared Anthropic/Gemini keys ("test mode") or requires each signed-in
+user to bring their own key ("BYOK mode"), a read-only checklist of
+which secrets this deployment has configured, and the public founder/
+author profile shown on `frontend/author.html`. It's for you (or
+whoever runs this deployment), not for AIRI's regular users.
 
 ## Why this exists
 
@@ -133,6 +134,61 @@ Requires the same admin token. Body: `{"test_mode": true}` (or
 shape as `GET /admin/config`'s `test_mode`/`source` fields, so the
 admin page can confirm what actually took effect. `503` if the database
 isn't configured.
+
+### `GET /author`
+
+Public, no auth. Returns the current founder/author profile — see
+"Author profile" below — as all-empty strings if nothing's been set.
+Used by both `frontend/author.html` (to render it) and the admin page
+(to prefill the edit form).
+
+### `POST /admin/author`
+
+Requires the admin token. Body is the full profile (see below) — this
+is a **full replace**, same semantics as `POST /admin/config`: a field
+left out is saved as `""`, not left unchanged. `400` if any field fails
+validation (a bad photo, something too long) — nothing is written when
+that happens, so a rejected save can't half-overwrite a good profile.
+`503` if the database isn't configured.
+
+## Author profile
+
+`frontend/author.html` is a small public page — a founder/about page —
+built entirely from one admin-edited record: name, title, company,
+tagline, bio, location, email, website, LinkedIn, X/Twitter, GitHub,
+and a photo. Storage reuses the same `app_config` table as the
+test-mode toggle (one row, key `"author_profile"`, value a JSON blob —
+see `airi/author.py`) rather than a dedicated table, since it's a
+single record with no relational structure.
+
+Every field is optional and independent — leaving one blank just hides
+that part of the page (no title/company → no role line; no photo → a
+circular initial in its place; no links → no links row). There's
+nothing to "turn on"; the page always reflects whatever's currently
+saved, and shows a plain "no profile set up yet" state if nothing has
+been.
+
+**Validation** (`airi/author.py`, enforced server-side regardless of
+what the admin UI already checks client-side):
+
+| Field | Limit |
+|---|---|
+| `name`, `title`, `company`, `tagline`, `location`, `email`, `website`, `linkedin`, `twitter`, `github` | 200 characters |
+| `bio` | 4,000 characters |
+| `photo_data_url` | Must be a `data:image/{png,jpeg,webp,gif};base64,...` URL (SVG deliberately excluded — it can carry embedded script); capped at ~2MB of base64 text |
+
+The admin page's photo upload resizes and re-encodes the image
+client-side (max 480px on the longer side, JPEG at 85% quality) before
+it ever reaches this validation, so a phone photo doesn't turn into a
+multi-MB row — the size cap above is a backstop, not the expected case.
+
+**Rendering safety**: `website`/`linkedin`/`twitter`/`github` are
+free-text server-side (only length-checked, so an admin *could* type
+`javascript:...` into one) — `frontend/author.html` is what actually
+enforces that a link is only ever rendered if it starts with `http://`
+or `https://`, and only renders an `email` value as a `mailto:` link if
+it's shaped like an email address. Anything else is simply omitted
+from the links row rather than shown as broken or unsafe.
 
 ## BYOK request shape
 

@@ -72,6 +72,16 @@
   .endpoint-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
   .endpoint-table th, .endpoint-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   .endpoint-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .site-footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -129,6 +139,10 @@ uvicorn api:app --reload</code></pre>
       Questions or want a walk-through of a scenario first? See
       <a href="about.html">What's AIRI?</a>
     </p>
+
+    <div class="site-footer">
+      <a href="privacy.html">Privacy</a>
+    </div>
   </div>
 
 <script>

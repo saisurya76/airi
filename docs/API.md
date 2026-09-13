@@ -511,6 +511,8 @@ admin page (`frontend/admin.html`). Endpoint summary:
 | `POST /admin/login` | `{"password": "..."}` in body | Returns a 12h admin token on success (`401` wrong password, `503` not configured) |
 | `GET /admin/config` | `Authorization: Bearer <admin token>` | Current `test_mode` + its `source` (`"admin"`/`"env"`/`"default"`), plus a read-only checklist of which secrets are configured |
 | `POST /admin/config` | same | Body `{"test_mode": bool}` — sets an admin override (persists in Postgres); `503` if the database isn't configured |
+| `GET /author` | none | The founder/author profile shown on `frontend/author.html` — all-empty strings if nothing's been set |
+| `POST /admin/author` | `Authorization: Bearer <admin token>` | Body is the full profile (see [docs/ADMIN.md](ADMIN.md#author-profile)) — a full replace; `400` on an invalid field (nothing is written), `503` if the database isn't configured |
 
 An admin token is a distinct, shorter-lived (12h) JWT from a user's
 Exact-mode session token — `airi/auth.py` rejects either type outright

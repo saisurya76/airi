@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Privacy</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .top-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .top-bar a:hover { text-decoration: underline; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .updated { color: var(--muted); font-size: 13px; margin: 0 0 26px; }
+  h2 { font-size: 16px; margin: 30px 0 8px; }
+  p { margin: 0 0 12px; font-size: 14.5px; }
+  ul { margin: 0 0 12px; padding-left: 20px; }
+  li { margin-bottom: 6px; font-size: 14.5px; }
+  code {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12.5px;
+  }
+  a { color: var(--accent); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-top: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 6px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .site-footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar"><a href="index.html">← Back to AIRI</a></div>
+
+    <h1>Privacy</h1>
+    <p class="updated">Last updated: September 13, 2026</p>
+
+    <p>
+      AIRI (AI Request Intelligence) is built to need as little of your data as possible — most of
+      what it does requires none at all. This page explains, plainly, what's collected across each
+      part of the app and why.
+    </p>
+
+    <h2>The default flavor — nothing is stored</h2>
+    <p>
+      <code>/analyze</code>, <code>/project</code>, and <code>/report</code> (plus its HTML/PDF
+      variants) are fully stateless: whatever you submit — a prompt, a set of request archetypes, a
+      batch of load-test records — is processed in memory to compute an estimate or a report, and
+      then discarded. None of it is written to a database or logged anywhere. This covers the
+      single-request check, traffic projection, and load-test reporting sections of the try-it page.
+    </p>
+
+    <h2>Exact mode — email sign-in</h2>
+    <p>Switching to Exact mode and signing in involves a small amount of account-like data:</p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>What</th><th>Why</th><th>Retention</th></tr></thead>
+        <tbody>
+          <tr><td>Your email address</td><td>To send you a one-time sign-in code and recognize returning sign-ins</td><td>Kept until deletion is requested (see "Contact" below)</td></tr>
+          <tr><td>The 6-digit code</td><td>Sign-in verification</td><td>Stored only as a salted hash, never in plain text; expires in 10 minutes and is single-use; periodically purged</td></tr>
+          <tr><td>Your session token</td><td>Keeps you signed in</td><td>A signed token kept in your browser's local storage — never stored server-side; expires after 30 days</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      There's no password to set, no profile to fill in, and no marketing use of your email —
+      it exists solely to run the sign-in flow.
+    </p>
+
+    <h2>Exact mode — your own API key (BYOK)</h2>
+    <p>
+      When this deployment asks you to bring your own Anthropic/Google API key for Exact mode,
+      that key is stored only in your own browser's local storage. It's sent along with each Exact
+      request so AIRI can call that provider on your behalf, and is never written to AIRI's
+      database, logged, or shared. You can clear it at any time from the "Manage keys" option once
+      signed in.
+    </p>
+
+    <h2>What we send to other services</h2>
+    <p>Running AIRI relies on a small number of other services, each only for the specific job below:</p>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Service</th><th>What it sees</th></tr></thead>
+        <tbody>
+          <tr><td>Neon (Postgres)</td><td>Email addresses, hashed sign-in codes, and this deployment's admin-configured settings</td></tr>
+          <tr><td>Resend</td><td>The email address and 6-digit code needed to deliver a sign-in email</td></tr>
+          <tr><td>Anthropic / Google</td><td>The prompt or messages you're checking — only for the specific Exact-mode request you make, only to their free token-counting endpoints, and only when Exact mode is in use</td></tr>
+          <tr><td>Render / GitHub Pages</td><td>Standard web hosting logs (e.g. IP address, request timing) for the API and static site respectively — nothing AIRI-specific</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Cookies &amp; tracking</h2>
+    <p>
+      AIRI doesn't use tracking cookies, third-party analytics, or advertising of any kind. The
+      only browser storage involved is your session token and, in BYOK mode, your own API key(s) —
+      both kept locally in your browser, both under your control to clear at any time.
+    </p>
+
+    <h2>The author profile</h2>
+    <p>
+      The <a href="author.html">Author</a> page shows a profile the site admin has chosen to make
+      public (name, photo, bio, links) — it's not information collected from visitors, and visiting
+      that page doesn't share anything about you with us.
+    </p>
+
+    <h2>Children's privacy</h2>
+    <p>AIRI is a developer tool and isn't directed at children; we don't knowingly collect data from anyone under 13.</p>
+
+    <h2>Changes to this page</h2>
+    <p>If what AIRI collects changes — a new feature, a new integration — this page is updated to match, with the date above reflecting the latest revision.</p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about this page, or want your data removed? Reach out via the contact details on
+      the <a href="author.html">Author</a> page.
+    </p>
+
+    <div class="site-footer">
+      <a href="index.html">AIRI</a>
+    </div>
+  </div>
+</body>
+</html>

@@ -35,7 +35,7 @@
     margin-bottom: 20px;
   }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  input {
+  input, textarea {
     width: 100%;
     background: #0f1115;
     border: 1px solid var(--border);
@@ -45,6 +45,10 @@
     font-size: 14px;
     font-family: inherit;
   }
+  textarea { min-height: 90px; resize: vertical; }
+  .field { margin-top: 14px; }
+  .field:first-child { margin-top: 0; }
+  .field-hint { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
   .row { display: flex; gap: 12px; margin-top: 14px; }
   .row > div { flex: 1; }
   button {
@@ -124,6 +128,31 @@
     border-radius: 8px;
     padding: 8px 10px;
   }
+
+  .photo-row { display: flex; align-items: center; gap: 14px; }
+  .avatar-preview {
+    width: 64px; height: 64px; border-radius: 50%;
+    object-fit: cover; border: 1px solid var(--border);
+    background: #0f1115; flex: none;
+  }
+  .avatar-preview-empty {
+    width: 64px; height: 64px; border-radius: 50%;
+    border: 1px dashed var(--border); flex: none;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 11px; text-align: center;
+  }
+  .photo-actions { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+  .photo-actions input[type="file"] { font-size: 12.5px; }
+  .photo-actions .secondary-btn { margin-top: 0; padding: 6px 12px; font-size: 12.5px; align-self: flex-start; }
+  .site-footer {
+    margin-top: 8px;
+    padding-top: 16px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -192,6 +221,62 @@
         </li>
       </ul>
     </div>
+
+    <div id="authorPanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">Author profile</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">Shown publicly on the "Author" page — leave a field blank to hide it there.</p>
+
+      <div class="field" style="margin-top:16px;">
+        <label for="authorPhotoInput">Photo</label>
+        <div class="photo-row">
+          <img id="authorPhotoPreviewImg" class="avatar-preview hidden" alt="" />
+          <div id="authorPhotoPreviewEmpty" class="avatar-preview-empty">No photo</div>
+          <div class="photo-actions">
+            <input type="file" id="authorPhotoInput" accept="image/*" />
+            <button type="button" id="removePhotoBtn" class="secondary-btn hidden">Remove photo</button>
+          </div>
+        </div>
+        <div class="field-hint">Resized automatically on upload — PNG, JPEG, WEBP, or GIF, under 8MB.</div>
+        <div id="photoError" class="error hidden"></div>
+      </div>
+
+      <div class="row">
+        <div class="field"><label for="authorNameInput">Name</label><input id="authorNameInput" type="text" /></div>
+        <div class="field"><label for="authorTitleInput">Title</label><input id="authorTitleInput" type="text" placeholder="Founder & Builder" /></div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="authorCompanyInput">Company</label><input id="authorCompanyInput" type="text" placeholder="LivingIQ" /></div>
+        <div class="field"><label for="authorLocationInput">Location</label><input id="authorLocationInput" type="text" placeholder="Goa, India" /></div>
+      </div>
+      <div class="field">
+        <label for="authorTaglineInput">Tagline</label>
+        <input id="authorTaglineInput" type="text" placeholder="One line under your name" />
+      </div>
+      <div class="field">
+        <label for="authorBioInput">Bio</label>
+        <textarea id="authorBioInput" placeholder="A short paragraph or two about you."></textarea>
+      </div>
+      <div class="row">
+        <div class="field"><label for="authorEmailInput">Public email</label><input id="authorEmailInput" type="email" /></div>
+        <div class="field"><label for="authorWebsiteInput">Website</label><input id="authorWebsiteInput" type="text" placeholder="https://…" /></div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="authorLinkedinInput">LinkedIn</label><input id="authorLinkedinInput" type="text" placeholder="https://linkedin.com/in/…" /></div>
+        <div class="field"><label for="authorTwitterInput">X / Twitter</label><input id="authorTwitterInput" type="text" placeholder="https://x.com/…" /></div>
+      </div>
+      <div class="field">
+        <label for="authorGithubInput">GitHub</label>
+        <input id="authorGithubInput" type="text" placeholder="https://github.com/…" />
+      </div>
+
+      <button type="button" id="saveAuthorBtn" style="width:100%;">Save author profile</button>
+      <div id="authorError" class="error hidden"></div>
+      <div id="authorSavedMsg" class="saved-msg hidden">Saved.</div>
+    </div>
+
+    <div class="site-footer">
+      <a href="privacy.html">Privacy</a>
+    </div>
   </div>
 
 <script>
@@ -219,10 +304,13 @@
   const toggleError = document.getElementById("toggleError");
   const toggleSavedMsg = document.getElementById("toggleSavedMsg");
 
+  const authorPanel = document.getElementById("authorPanel");
+
   function showSignedOut() {
     loginPanel.classList.remove("hidden");
     dashboardPanel.classList.add("hidden");
     checklistPanel.classList.add("hidden");
+    authorPanel.classList.add("hidden");
     signOutBtn.classList.add("hidden");
   }
 
@@ -230,6 +318,7 @@
     loginPanel.classList.add("hidden");
     dashboardPanel.classList.remove("hidden");
     checklistPanel.classList.remove("hidden");
+    authorPanel.classList.remove("hidden");
     signOutBtn.classList.remove("hidden");
   }
 
@@ -272,7 +361,172 @@
       toggleError.classList.remove("hidden");
       showSignedIn();
     }
+    loadAuthorProfile();
   }
+
+  // ---------- Author profile ----------
+
+  const AUTHOR_TEXT_FIELDS = ["name", "title", "company", "tagline", "bio", "location", "email", "website", "linkedin", "twitter", "github"];
+  const authorInputs = {
+    name: document.getElementById("authorNameInput"),
+    title: document.getElementById("authorTitleInput"),
+    company: document.getElementById("authorCompanyInput"),
+    tagline: document.getElementById("authorTaglineInput"),
+    bio: document.getElementById("authorBioInput"),
+    location: document.getElementById("authorLocationInput"),
+    email: document.getElementById("authorEmailInput"),
+    website: document.getElementById("authorWebsiteInput"),
+    linkedin: document.getElementById("authorLinkedinInput"),
+    twitter: document.getElementById("authorTwitterInput"),
+    github: document.getElementById("authorGithubInput"),
+  };
+  const authorPhotoInput = document.getElementById("authorPhotoInput");
+  const authorPhotoPreviewImg = document.getElementById("authorPhotoPreviewImg");
+  const authorPhotoPreviewEmpty = document.getElementById("authorPhotoPreviewEmpty");
+  const removePhotoBtn = document.getElementById("removePhotoBtn");
+  const photoError = document.getElementById("photoError");
+  const saveAuthorBtn = document.getElementById("saveAuthorBtn");
+  const authorError = document.getElementById("authorError");
+  const authorSavedMsg = document.getElementById("authorSavedMsg");
+
+  // Current photo data URL, kept separately from the text fields since
+  // it doesn't live in a plain <input>. Starts as whatever GET /author
+  // last returned; a new upload or "Remove photo" updates it in place.
+  let pendingPhotoDataUrl = "";
+
+  function renderPhotoPreview() {
+    if (pendingPhotoDataUrl) {
+      authorPhotoPreviewImg.src = pendingPhotoDataUrl;
+      authorPhotoPreviewImg.classList.remove("hidden");
+      authorPhotoPreviewEmpty.classList.add("hidden");
+      removePhotoBtn.classList.remove("hidden");
+    } else {
+      authorPhotoPreviewImg.classList.add("hidden");
+      authorPhotoPreviewEmpty.classList.remove("hidden");
+      removePhotoBtn.classList.add("hidden");
+    }
+  }
+
+  async function loadAuthorProfile() {
+    try {
+      const res = await fetch(`${API_BASE}/author`);
+      const profile = await res.json();
+      AUTHOR_TEXT_FIELDS.forEach((field) => {
+        if (authorInputs[field]) authorInputs[field].value = profile[field] || "";
+      });
+      pendingPhotoDataUrl = profile.photo_data_url || "";
+      renderPhotoPreview();
+    } catch (e) {
+      // Non-fatal: the form just stays empty, same as a brand-new profile.
+    }
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Could not read the selected file."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImageElement(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not load the selected image."));
+      img.src = dataUrl;
+    });
+  }
+
+  const MAX_RAW_PHOTO_BYTES = 8 * 1024 * 1024;
+  const PHOTO_MAX_DIMENSION = 480;
+
+  // Downscales + re-encodes as JPEG so a phone photo doesn't turn into a
+  // multi-MB row in Postgres. Falls back to the untouched original if
+  // this environment has no working <canvas> 2D context (still capped
+  // server-side by author.MAX_PHOTO_DATA_URL_CHARS either way).
+  async function processPhotoFile(file) {
+    if (!file.type || !file.type.startsWith("image/")) {
+      throw new Error("Please choose an image file (PNG, JPEG, WEBP, or GIF).");
+    }
+    if (file.size > MAX_RAW_PHOTO_BYTES) {
+      throw new Error("That image is too large — please choose one under 8MB.");
+    }
+    const rawDataUrl = await readFileAsDataUrl(file);
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext && canvas.getContext("2d");
+      if (!ctx) return rawDataUrl;
+      const img = await loadImageElement(rawDataUrl);
+      let { width, height } = img;
+      if (!width || !height) return rawDataUrl;
+      if (width > PHOTO_MAX_DIMENSION || height > PHOTO_MAX_DIMENSION) {
+        const scale = PHOTO_MAX_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+      const resized = canvas.toDataURL("image/jpeg", 0.85);
+      return resized && resized.startsWith("data:image/") ? resized : rawDataUrl;
+    } catch (e) {
+      return rawDataUrl;
+    }
+  }
+
+  authorPhotoInput.addEventListener("change", async () => {
+    photoError.classList.add("hidden");
+    const file = authorPhotoInput.files && authorPhotoInput.files[0];
+    if (!file) return;
+    try {
+      pendingPhotoDataUrl = await processPhotoFile(file);
+      renderPhotoPreview();
+    } catch (e) {
+      photoError.textContent = e.message;
+      photoError.classList.remove("hidden");
+    } finally {
+      authorPhotoInput.value = "";
+    }
+  });
+
+  removePhotoBtn.addEventListener("click", () => {
+    pendingPhotoDataUrl = "";
+    renderPhotoPreview();
+  });
+
+  saveAuthorBtn.addEventListener("click", async () => {
+    authorError.classList.add("hidden");
+    authorSavedMsg.classList.add("hidden");
+    saveAuthorBtn.disabled = true;
+    saveAuthorBtn.textContent = "Saving…";
+    const payload = { photo_data_url: pendingPhotoDataUrl };
+    AUTHOR_TEXT_FIELDS.forEach((field) => {
+      payload[field] = authorInputs[field].value.trim();
+    });
+    try {
+      const res = await fetch(`${API_BASE}/admin/author`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || "Could not save the author profile.");
+      authorSavedMsg.classList.remove("hidden");
+      setTimeout(() => authorSavedMsg.classList.add("hidden"), 2500);
+    } catch (e) {
+      authorError.textContent = e.message;
+      authorError.classList.remove("hidden");
+    } finally {
+      saveAuthorBtn.disabled = false;
+      saveAuthorBtn.textContent = "Save author profile";
+    }
+  });
 
   async function login() {
     loginError.classList.add("hidden");
