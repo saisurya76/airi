@@ -1,0 +1,700 @@
+<!--
+  A 12-step guided demo of every AIRI feature, told through one running
+  example (BrightCart's support bot, "TicketBot") so the steps read as
+  one story instead of 12 disconnected snippets. Steps that don't need
+  auth or write to a database call the real live API — labeled "Live".
+  Steps that would otherwise require a real sign-in or leave demo junk
+  in production data (Workspaces, consolidated report, comparison) are
+  simulated with clearly-labeled sample data — labeled "Demo". Keep this
+  in sync with index.html/workspaces.html if their request/response
+  shapes change.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Demo wizard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .top-bar a:hover { text-decoration: underline; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+
+  .wizard-head { margin-bottom: 18px; }
+  .progress-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .progress-track { height: 6px; border-radius: 3px; background: #1f232c; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.25s ease; }
+  .step-dots { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .step-dot {
+    width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .step-dot:hover { border-color: var(--accent); color: var(--text); }
+  .step-dot.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  .step-dot.done { background: rgba(62,207,142,0.15); color: var(--safe); border-color: rgba(62,207,142,0.4); }
+
+  .category-chip {
+    display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--accent); background: rgba(110,168,254,0.12);
+    border: 1px solid rgba(110,168,254,0.4); border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+  }
+  .kind-badge {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
+    padding: 3px 10px; margin-bottom: 10px; margin-left: 6px;
+  }
+  .kind-badge.live { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .kind-badge.demo { background: rgba(242,184,75,0.15); color: var(--warning); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .step-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
+  .step-blurb { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+
+  .sample-box {
+    background: #0f1115; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 14px;
+  }
+  .sample-box .kv { display: flex; gap: 10px; padding: 4px 0; font-size: 13px; }
+  .sample-box .kv + .kv { border-top: 1px dashed var(--border); }
+  .sample-box .k { color: var(--muted); flex: 0 0 150px; }
+  .sample-box .v { color: var(--text); word-break: break-word; }
+  .sample-box .v.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+
+  button {
+    background: var(--accent); color: #0f1115; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .secondary-btn { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .run-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .error { color: var(--exceeded); font-size: 13px; margin-top: 10px; }
+
+  .result-box { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .result-box:empty { display: none; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .stat .value { font-size: 16px; font-weight: 600; }
+  .status-badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    font-weight: 700; letter-spacing: 0.03em;
+  }
+  .status-SAFE { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .status-WARNING { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .status-EXCEEDED { background: rgba(242,85,90,0.15); color: var(--exceeded); }
+  .demo-note {
+    color: var(--muted); font-size: 12px; margin-top: 12px; background: rgba(242,184,75,0.08);
+    border: 1px solid rgba(242,184,75,0.3); border-radius: 8px; padding: 8px 10px;
+  }
+  table.mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  table.mini-table th, table.mini-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.mini-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  iframe.report-frame { width: 100%; height: 360px; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; background: #fff; }
+  a.file-link { display: inline-block; margin-top: 10px; color: var(--accent); font-weight: 600; text-decoration: none; }
+  a.file-link:hover { text-decoration: underline; }
+  .otp-mock { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .otp-mock input {
+    background: #0f1115; border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+    padding: 8px 10px; font-size: 14px; width: 100%;
+  }
+
+  .nav-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+  .nav-row .spacer { flex: 1; }
+
+  .finish-panel { text-align: center; }
+  .finish-panel a.btn {
+    display: inline-block; background: var(--accent); color: #0f1115; text-decoration: none;
+    border-radius: 8px; padding: 12px 20px; font-size: 15px; font-weight: 700; margin-top: 14px;
+  }
+
+  .site-footer {
+    margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    text-align: center; color: var(--muted); font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
+  .site-footer a:hover { color: var(--accent); }
+  @media (max-width: 480px) {
+    .result-grid { grid-template-columns: 1fr; }
+    .sample-box .k { flex-basis: 110px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <a href="landing.html">← Back to AIRI</a>
+      <a href="index.html">Open the app →</a>
+    </div>
+
+    <h1>AIRI in 12 steps</h1>
+    <p class="sub">
+      One running example — BrightCart's support bot, "TicketBot" — walked through every AIRI
+      feature. Steps marked <b style="color:var(--safe);">Live</b> call the real API right now;
+      steps marked <b style="color:var(--warning);">Demo</b> use sample data because they'd
+      otherwise need a real sign-in or would leave test data in a real account. Click each step's
+      button to run it, then Next/Prev to move around — nothing to type.
+    </p>
+
+    <div class="wizard-head">
+      <div class="progress-row">
+        <span id="stepLabel">Step 1 of 12</span>
+        <span id="categoryLabelTop"></span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:8.3%;"></div></div>
+      <div class="step-dots" id="stepDots"></div>
+    </div>
+
+    <div class="panel" id="stepPanel"></div>
+
+    <div class="nav-row">
+      <button type="button" id="prevBtn" class="secondary-btn">← Prev</button>
+      <div class="spacer"></div>
+      <button type="button" id="nextBtn">Next →</button>
+    </div>
+
+    <div class="site-footer">
+      <a href="landing.html">AIRI home</a>
+      <a href="about.html">What's AIRI?</a>
+      <a href="scenarios.html">Usage scenarios</a>
+      <a href="developers.html">For developers</a>
+    </div>
+  </div>
+
+<script>
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+  const RUN_NAME = "BrightCart demo — TicketBot support traffic";
+
+  const ORDER_PROMPT = "Hi, my order #4821 hasn't arrived yet — can you check the status?";
+  const ESCALATION_PROMPT = "Customer says order #4821 hasn't arrived in 9 days, wants a refund or replacement. Summarize this thread for a human agent.";
+  const POLICY_PROMPT = "What's BrightCart's return policy for electronics?";
+
+  const RECORD_ARCHETYPES = [
+    { label: "order-status", prompt: ORDER_PROMPT, model: "gpt-4o-mini", expected_output_tokens: 120, normal: 3, peak: 2 },
+    { label: "escalation-summary", prompt: ESCALATION_PROMPT, model: "claude-3-5-sonnet", expected_output_tokens: 80, normal: 2, peak: 1 },
+  ];
+
+  const state = { step1: null, escalation: null, reportRecords: null };
+
+  function esc(str) {
+    const d = document.createElement("div");
+    d.textContent = str == null ? "" : String(str);
+    return d.innerHTML;
+  }
+
+  function money(n) {
+    if (n == null) return "—";
+    return n < 0.01 ? `$${n.toFixed(6)}` : `$${n.toFixed(4)}`;
+  }
+
+  async function fetchAnalyze(prompt, model, expected_output_tokens) {
+    const res = await fetch(`${API_BASE}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, model, expected_output_tokens }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data && data.detail) || "Request failed.");
+    return data;
+  }
+
+  function tagRecord(result, label, phase, startTime, index, total) {
+    const ts = new Date(startTime + (total > 1 ? (index / (total - 1)) * 8000 : 0));
+    return { ...result, label, phase, timestamp: ts.toISOString() };
+  }
+
+  async function getOrBuildReportRecords(setStatus) {
+    if (state.reportRecords) return state.reportRecords;
+    const records = [];
+    const startTime = Date.now() - 8000;
+    const total = RECORD_ARCHETYPES.reduce((s, a) => s + a.normal + a.peak, 0);
+    let i = 0;
+    for (const arc of RECORD_ARCHETYPES) {
+      for (let n = 0; n < arc.normal; n++) {
+        setStatus && setStatus(`Simulating "${arc.label}" traffic… (${i + 1}/${total})`);
+        const r = await fetchAnalyze(arc.prompt, arc.model, arc.expected_output_tokens);
+        records.push(tagRecord(r, arc.label, "normal", startTime, i, total));
+        i++;
+      }
+      for (let p = 0; p < arc.peak; p++) {
+        setStatus && setStatus(`Simulating "${arc.label}" traffic… (${i + 1}/${total})`);
+        const r = await fetchAnalyze(arc.prompt, arc.model, arc.expected_output_tokens);
+        records.push(tagRecord(r, arc.label, "peak", startTime, i, total));
+        i++;
+      }
+    }
+    state.reportRecords = records;
+    return records;
+  }
+
+  function analyzeResultHtml(r, extraNote) {
+    return `
+      <div class="result-grid">
+        <div class="stat"><div class="label">Input tokens</div><div class="value">${r.input_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Output tokens (est.)</div><div class="value">${r.estimated_output_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Total tokens</div><div class="value">${r.estimated_total_tokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Estimated cost</div><div class="value">${money(r.estimated_cost)}</div></div>
+      </div>
+      <p style="margin:12px 0 0;font-size:13px;">
+        <span class="status-badge status-${r.status}">${r.status}</span>
+        &nbsp;${(r.context_utilization * 100).toFixed(2)}% of ${r.context_window.toLocaleString()}-token window
+        &nbsp;·&nbsp; method: <code>${esc(r.method)}</code>, confidence: <code>${esc(r.confidence)}</code>
+      </p>
+      ${extraNote ? `<div class="demo-note">${extraNote}</div>` : ""}
+    `;
+  }
+
+  // ---------------------------------------------------------------------
+  // The 12 steps
+  // ---------------------------------------------------------------------
+  const STEPS = [
+    {
+      category: "Core",
+      title: "Check a single request",
+      kind: "live",
+      blurb: "TicketBot is about to answer a customer message. Before sending it to the model, AIRI checks how many tokens it'll use, how much of the model's context window that eats, and roughly what it'll cost.",
+      actionLabel: "Analyze request",
+      renderRequest: () => sampleBox([
+        ["Prompt", `"${ORDER_PROMPT}"`],
+        ["Model", "gpt-4o-mini"],
+        ["Expected output tokens", "120"],
+      ]),
+      run: async () => {
+        const r = await fetchAnalyze(ORDER_PROMPT, "gpt-4o-mini", 120);
+        state.step1 = r;
+        return r;
+      },
+      renderResult: (r) => analyzeResultHtml(r),
+    },
+    {
+      category: "Exact mode",
+      title: "Exact mode — real Claude/Gemini token counts",
+      kind: "live",
+      blurb: "This message gets escalated to a human agent, so TicketBot asks Claude for a higher-quality summary first. For Claude/Gemini, Exact mode calls that provider's own token-counting API instead of estimating — this step shows AIRI's estimate for the same request; signing in swaps this exact field for Claude's own count, same shape, better precision.",
+      actionLabel: "Analyze escalation summary",
+      renderRequest: () => sampleBox([
+        ["Prompt", `"${ESCALATION_PROMPT}"`],
+        ["Model", "claude-3-5-sonnet"],
+        ["Expected output tokens", "80"],
+      ]),
+      run: async () => {
+        const r = await fetchAnalyze(ESCALATION_PROMPT, "claude-3-5-sonnet", 80);
+        state.escalation = r;
+        return r;
+      },
+      renderResult: (r) => analyzeResultHtml(
+        r,
+        "Signed-in users get this from <code>/analyze/exact</code> instead — the input-token count above comes straight from Claude's own API rather than this estimate, and <code>method</code> reads <code>provider-api</code>."
+      ),
+    },
+    {
+      category: "Core",
+      title: "Project cost across all of TicketBot's traffic",
+      kind: "live",
+      blurb: "TicketBot isn't just one request shape — it's a handful of them, each hit a different number of times per month. AIRI multiplies each shape by its expected volume and totals it up.",
+      actionLabel: "Run projection",
+      renderRequest: () => sampleBox([
+        ["order-status ×20,000/mo", "gpt-4o-mini, 120 out"],
+        ["escalation-summary ×1,500/mo", "claude-3-5-sonnet, 80 out"],
+        ["returns-policy-qa ×8,000/mo", "gpt-4o-mini, 150 out"],
+      ]),
+      run: async () => {
+        const archetypes = [
+          { name: "order-status", volume: 20000, prompt: ORDER_PROMPT, model: "gpt-4o-mini", expected_output_tokens: 120 },
+          { name: "escalation-summary", volume: 1500, prompt: ESCALATION_PROMPT, model: "claude-3-5-sonnet", expected_output_tokens: 80 },
+          { name: "returns-policy-qa", volume: 8000, prompt: POLICY_PROMPT, model: "gpt-4o-mini", expected_output_tokens: 150 },
+        ];
+        const res = await fetch(`${API_BASE}/project`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ archetypes }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error((data && data.detail) || "Request failed.");
+        return data;
+      },
+      renderResult: (r) => `
+        <table class="mini-table">
+          <tr><th>Call site</th><th>Volume/mo</th><th>Cost/mo</th></tr>
+          ${r.archetypes.map(a => `<tr><td>${esc(a.name)}</td><td>${a.volume.toLocaleString()}</td><td>${money(a.projected_cost)}</td></tr>`).join("")}
+        </table>
+        <div class="result-grid" style="margin-top:12px;">
+          <div class="stat"><div class="label">Total monthly tokens</div><div class="value">${r.total_tokens.toLocaleString()}</div></div>
+          <div class="stat"><div class="label">Total monthly cost</div><div class="value">${money(r.total_cost)}</div></div>
+        </div>
+      `,
+    },
+    {
+      category: "Reports",
+      title: "Consolidate a load test into a report (JSON)",
+      kind: "live",
+      blurb: "A real load test hits /analyze many times and keeps every result. Here AIRI simulates that traffic (8 real /analyze calls across normal + peak load) and consolidates it into one report.",
+      actionLabel: "Run simulated load test",
+      renderRequest: () => sampleBox([
+        ["Run name", RUN_NAME],
+        ["Records", "8 tagged /analyze results (order-status + escalation-summary, normal + peak)"],
+      ]),
+      run: async (setStatus) => {
+        const records = await getOrBuildReportRecords(setStatus);
+        setStatus && setStatus("Consolidating into a report…");
+        const res = await fetch(`${API_BASE}/report`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_name: RUN_NAME, records }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error((data && data.detail) || "Request failed.");
+        return data;
+      },
+      renderResult: (r) => `
+        <div class="result-grid">
+          <div class="stat"><div class="label">Total requests</div><div class="value">${r.total_requests}</div></div>
+          <div class="stat"><div class="label">Total cost</div><div class="value">${money(r.total_cost)}</div></div>
+        </div>
+        <p style="margin:12px 0 0;font-size:13px;">
+          ${Object.entries(r.status_counts).map(([k, v]) => `<span class="status-badge status-${k}" style="margin-right:6px;">${k}: ${v}</span>`).join("")}
+        </p>
+        <table class="mini-table">
+          <tr><th>Label</th><th>Count</th><th>Cost</th></tr>
+          ${Object.entries(r.by_label).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.count}</td><td>${money(v.cost)}</td></tr>`).join("")}
+        </table>
+      `,
+    },
+    {
+      category: "Reports",
+      title: "Same report, rendered as HTML",
+      kind: "live",
+      blurb: "The same data, requested as a single self-contained HTML page — suitable for an iframe or opening directly. Reuses the traffic from the previous step if you already ran it.",
+      actionLabel: "Render HTML report",
+      renderRequest: () => sampleBox([
+        ["Endpoint", "POST /report/html"],
+        ["Body", "same run_name + records as the JSON report"],
+      ]),
+      run: async (setStatus) => {
+        const records = await getOrBuildReportRecords(setStatus);
+        setStatus && setStatus("Rendering HTML…");
+        const res = await fetch(`${API_BASE}/report/html`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_name: RUN_NAME, records }),
+        });
+        const html = await res.text();
+        if (!res.ok) throw new Error("Request failed.");
+        return html;
+      },
+      renderResult: (html) => {
+        const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+        return `
+          <iframe class="report-frame" srcdoc="${esc(html).replace(/"/g, "&quot;")}"></iframe>
+          <a class="file-link" href="${blobUrl}" target="_blank" rel="noopener">Open full report in a new tab →</a>
+        `;
+      },
+    },
+    {
+      category: "Reports",
+      title: "Same report, as a downloadable PDF",
+      kind: "live",
+      blurb: "Same template as the HTML report, converted to a PDF — the two always agree because they're built from the same renderer.",
+      actionLabel: "Generate PDF",
+      renderRequest: () => sampleBox([
+        ["Endpoint", "POST /report/pdf"],
+        ["Body", "same run_name + records as the JSON report"],
+      ]),
+      run: async (setStatus) => {
+        const records = await getOrBuildReportRecords(setStatus);
+        setStatus && setStatus("Rendering PDF…");
+        const res = await fetch(`${API_BASE}/report/pdf`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_name: RUN_NAME, records }),
+        });
+        if (!res.ok) throw new Error("Request failed.");
+        return await res.blob();
+      },
+      renderResult: (blob) => {
+        const blobUrl = URL.createObjectURL(blob);
+        return `<a class="file-link" href="${blobUrl}" download="brightcart-ticketbot-report.pdf">Download brightcart-ticketbot-report.pdf →</a>`;
+      },
+    },
+    {
+      category: "Auth & Workspaces",
+      title: "Sign in with a one-time email code",
+      kind: "demo",
+      blurb: "Workspaces and Exact mode both sit behind a passwordless sign-in — just an email and a 6-digit code, no account to set up. Simulated here so the wizard doesn't need your real inbox.",
+      actionLabel: "Send code",
+      renderRequest: () => sampleBox([
+        ["Email", "demo@brightcart-support.example"],
+      ]),
+      run: async () => {
+        await sleep(500);
+        return { sent: true };
+      },
+      renderResult: () => `
+        <div class="otp-mock">
+          <input type="text" value="482117" disabled />
+          <button type="button" id="verifyDemoBtn">Verify</button>
+        </div>
+        <div id="verifyDemoResult"></div>
+        <div class="demo-note">In your own browser this code arrives by real email (Resend) and the session is a real signed JWT — simulated here so this step doesn't wait on your inbox.</div>
+      `,
+      afterRender: () => {
+        const btn = document.getElementById("verifyDemoBtn");
+        if (btn) {
+          btn.addEventListener("click", async () => {
+            btn.disabled = true;
+            btn.textContent = "Verifying…";
+            await sleep(400);
+            document.getElementById("verifyDemoResult").innerHTML =
+              `<p style="margin-top:10px;font-size:13px;color:var(--safe);">✓ Signed in as demo@brightcart-support.example</p>`;
+          });
+        }
+      },
+    },
+    {
+      category: "Auth & Workspaces",
+      title: "Create a workspace",
+      kind: "demo",
+      blurb: "Once signed in, BrightCart's admin creates a workspace to organize every project (and every team member) around one shared dashboard.",
+      actionLabel: "Create workspace",
+      renderRequest: () => sampleBox([
+        ["Title", "BrightCart Support"],
+        ["Target", "Cut support AI cost per ticket by 25%"],
+        ["Description", "Track every AI-assisted support interaction and its cost."],
+      ]),
+      run: async () => { await sleep(500); return {}; },
+      renderResult: () => `
+        <div class="sample-box">
+          <div class="kv"><span class="k">Workspace</span><span class="v">BrightCart Support</span></div>
+          <div class="kv"><span class="k">Role</span><span class="v">admin</span></div>
+          <div class="kv"><span class="k">Members</span><span class="v">1</span></div>
+          <div class="kv"><span class="k">Projects</span><span class="v">0</span></div>
+        </div>
+        <div class="demo-note">Sample data — in a real account this is a real row in Neon, and it shows up immediately under "Your workspaces."</div>
+      `,
+    },
+    {
+      category: "Auth & Workspaces",
+      title: "Add a project, run a tool inside it",
+      kind: "demo",
+      blurb: "Inside the workspace, BrightCart adds a \"TicketBot\" project and runs the same single-request check from step 1 — except now the result is saved to this project's history instead of thrown away.",
+      actionLabel: "Create project & run analyze",
+      renderRequest: () => sampleBox([
+        ["Project", "TicketBot"],
+        ["Tech stack", "AI services: OpenAI + Anthropic · Model: gpt-4o-mini, claude-3-5-sonnet"],
+        ["Tool run", "/analyze — same order-status request as step 1"],
+      ]),
+      run: async () => {
+        if (state.step1) return state.step1;
+        return await fetchAnalyze(ORDER_PROMPT, "gpt-4o-mini", 120);
+      },
+      renderResult: (r) => `
+        ${analyzeResultHtml(r)}
+        <div class="demo-note">The numbers above are real (from step 1, or a fresh live call) — only the "saved to the TicketBot project" framing is simulated, since that needs a real signed-in workspace.</div>
+      `,
+    },
+    {
+      category: "Auth & Workspaces",
+      title: "A project's consolidated report",
+      kind: "demo",
+      blurb: "Every tool run and note in a project rolls up into one dashboard — total spend, a breakdown by tool, and the latest activity, without wiring up any separate analytics.",
+      actionLabel: "Open consolidated report",
+      renderRequest: () => sampleBox([
+        ["Project", "TicketBot"],
+        ["Endpoint", "GET /projects/{id}/report/consolidated"],
+      ]),
+      run: async () => { await sleep(400); return {}; },
+      renderResult: () => `
+        <div class="result-grid">
+          <div class="stat"><div class="label">Total requests</div><div class="value">1,284</div></div>
+          <div class="stat"><div class="label">Total cost</div><div class="value">$4.62</div></div>
+        </div>
+        <table class="mini-table">
+          <tr><th>Tool</th><th>Runs</th><th>Cost</th></tr>
+          <tr><td>analyze</td><td>940</td><td>$2.10</td></tr>
+          <tr><td>exact</td><td>180</td><td>$1.35</td></tr>
+          <tr><td>project</td><td>12</td><td>$0.02</td></tr>
+          <tr><td>report</td><td>6</td><td>$0.01</td></tr>
+        </table>
+        <div class="demo-note">Illustrative sample numbers for the walkthrough — your real dashboard reflects your account's actual usage.</div>
+      `,
+    },
+    {
+      category: "Auth & Workspaces",
+      title: "Compare projects across a workspace",
+      kind: "demo",
+      blurb: "BrightCart runs more than one AI project — TicketBot is just support. The comparison view ranks every project in a workspace by spend, most expensive first.",
+      actionLabel: "Compare projects",
+      renderRequest: () => sampleBox([
+        ["Workspace", "BrightCart Support"],
+        ["Endpoint", "GET /workspaces/{id}/comparison"],
+      ]),
+      run: async () => { await sleep(400); return {}; },
+      renderResult: () => `
+        <table class="mini-table">
+          <tr><th>Project</th><th>Requests</th><th>Cost</th></tr>
+          <tr><td>Checkout Copilot</td><td>3,021</td><td>$11.30</td></tr>
+          <tr><td>TicketBot</td><td>1,284</td><td>$4.62</td></tr>
+          <tr><td>Warehouse Ops Bot</td><td>210</td><td>$1.08</td></tr>
+        </table>
+        <div class="demo-note">Illustrative sample numbers — a real comparison ranks your workspace's actual projects the same way.</div>
+      `,
+    },
+    {
+      category: "Library",
+      title: "Download the compiled core library",
+      kind: "live",
+      blurb: "Everything above is also a plain HTTP API — but if a service is in Python and would rather run the token math in-process with zero network dependency, this downloads a compiled (sourceless) build of just AIRI's estimation library.",
+      actionLabel: "Download airi-binary.zip",
+      renderRequest: () => sampleBox([
+        ["Endpoint", "GET /download"],
+        ["Contents", "airi/*.pyc — no source, no web/db dependencies"],
+      ]),
+      run: async () => {
+        const res = await fetch(`${API_BASE}/download`);
+        if (!res.ok) throw new Error("Request failed.");
+        return await res.blob();
+      },
+      renderResult: (blob) => {
+        const blobUrl = URL.createObjectURL(blob);
+        return `
+          <a class="file-link" href="${blobUrl}" download="airi-binary.zip">Download airi-binary.zip →</a>
+          <p style="margin-top:14px;font-size:13px;color:var(--muted);">That's every AIRI feature — check a request, project traffic, consolidate a report in three formats, sign in, organize work into workspaces, and take the library with you.</p>
+        `;
+      },
+      isFinal: true,
+    },
+  ];
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  function sampleBox(pairs) {
+    return `<div class="sample-box">${pairs.map(([k, v]) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v mono">${esc(v)}</span></div>`).join("")}</div>`;
+  }
+
+  // ---------------------------------------------------------------------
+  // Wizard chrome
+  // ---------------------------------------------------------------------
+  let current = 0;
+  const done = new Set();
+
+  const stepPanel = document.getElementById("stepPanel");
+  const stepLabel = document.getElementById("stepLabel");
+  const categoryLabelTop = document.getElementById("categoryLabelTop");
+  const progressFill = document.getElementById("progressFill");
+  const stepDots = document.getElementById("stepDots");
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+
+  function buildDots() {
+    stepDots.innerHTML = STEPS.map((_, i) =>
+      `<div class="step-dot" data-i="${i}">${i + 1}</div>`
+    ).join("");
+    stepDots.querySelectorAll(".step-dot").forEach((dot) => {
+      dot.addEventListener("click", () => { current = parseInt(dot.dataset.i, 10); renderStep(); });
+    });
+  }
+
+  function updateChrome() {
+    stepLabel.textContent = `Step ${current + 1} of ${STEPS.length}`;
+    categoryLabelTop.textContent = STEPS[current].category;
+    progressFill.style.width = `${((current + 1) / STEPS.length) * 100}%`;
+    stepDots.querySelectorAll(".step-dot").forEach((dot, i) => {
+      dot.classList.toggle("active", i === current);
+      dot.classList.toggle("done", done.has(i) && i !== current);
+    });
+    prevBtn.disabled = current === 0;
+    nextBtn.textContent = current === STEPS.length - 1 ? "Restart →" : "Next →";
+  }
+
+  function renderStep() {
+    const s = STEPS[current];
+    stepPanel.innerHTML = `
+      <span class="category-chip">${esc(s.category)}</span>
+      <span class="kind-badge ${s.kind}">${s.kind === "live" ? "Live" : "Demo"}</span>
+      <h2 class="step-title">${esc(s.title)}</h2>
+      <p class="step-blurb">${s.blurb}</p>
+      ${s.renderRequest()}
+      <button type="button" id="runStepBtn">${esc(s.actionLabel)}</button>
+      <div id="runStatus" class="run-note"></div>
+      <div id="runError" class="error"></div>
+      <div id="resultBox" class="result-box"></div>
+    `;
+    const runBtn = document.getElementById("runStepBtn");
+    const runStatus = document.getElementById("runStatus");
+    const runError = document.getElementById("runError");
+    const resultBox = document.getElementById("resultBox");
+
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      runError.textContent = "";
+      resultBox.innerHTML = "";
+      const setStatus = (msg) => { runStatus.textContent = msg; };
+      setStatus(s.kind === "live" ? "Running… (first call can take up to a minute if the demo server is asleep)" : "Running…");
+      try {
+        const data = await s.run(setStatus);
+        setStatus("");
+        resultBox.innerHTML = s.renderResult(data);
+        if (s.afterRender) s.afterRender();
+        done.add(current);
+        updateChrome();
+      } catch (e) {
+        setStatus("");
+        runError.textContent = e.message || "Something went wrong — try again in a moment.";
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+
+    if (s.isFinal) {
+      stepPanel.insertAdjacentHTML("beforeend", `
+        <div class="finish-panel" style="margin-top:20px;">
+          <a class="btn" href="index.html">Open AIRI now →</a>
+        </div>
+      `);
+    }
+
+    updateChrome();
+    window.scrollTo({ top: stepPanel.offsetTop - 20, behavior: "smooth" });
+  }
+
+  prevBtn.addEventListener("click", () => {
+    if (current > 0) { current--; renderStep(); }
+  });
+  nextBtn.addEventListener("click", () => {
+    if (current < STEPS.length - 1) { current++; renderStep(); }
+    else { current = 0; renderStep(); }
+  });
+
+  buildDots();
+  renderStep();
+</script>
+</body>
+</html>
