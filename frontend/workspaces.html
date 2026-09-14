@@ -477,11 +477,11 @@
   </div>
 
 <script>
-  // Same split-hosting note as index.html: the API lives on Render, this
+  // Same split-hosting note as app.html: the API lives on Render, this
   // page on GitHub Pages. Update this if you redeploy the API elsewhere.
   const API_BASE = "https://airi-mvp-api.onrender.com";
 
-  // Shared with index.html — signing in on either page keeps both in sync.
+  // Shared with app.html — signing in on either page keeps both in sync.
   const AUTH_TOKEN_KEY = "airi_auth_token";
   const AUTH_EMAIL_KEY = "airi_auth_email";
 
@@ -495,10 +495,10 @@
   let modelsData = [];
   let testMode = null; // null = not loaded yet; true/false once GET /config resolves
 
-  // Shared with index.html's BYOK panel — a project's Exact tab reuses
+  // Shared with app.html's BYOK panel — a project's Exact tab reuses
   // whatever key the user already saved there (or saves a new one),
   // same "this browser only, never sent anywhere but one Exact request"
-  // handling as index.html.
+  // handling as app.html.
   const BYOK_ANTHROPIC_KEY = "airi_byok_anthropic_key";
   const BYOK_GOOGLE_KEY = "airi_byok_google_key";
 
@@ -1786,7 +1786,7 @@
 
     if (tool === "analyze" || tool === "exact") {
       const byokNote = tool === "exact" && testMode === false
-        ? `<div class="tab-note">This deployment is in BYOK mode — the Anthropic/Google key you saved on the main page (if any) is reused here. <a href="index.html" style="color:var(--accent);">Manage keys</a>.</div>`
+        ? `<div class="tab-note">This deployment is in BYOK mode — the Anthropic/Google key you saved on the main page (if any) is reused here. <a href="app.html" style="color:var(--accent);">Manage keys</a>.</div>`
         : (tool === "exact" ? `<div class="tab-note">This deployment is in testing mode — Exact calls use AIRI's own shared keys here, nothing to configure.</div>` : "");
       panelEl.innerHTML = `
         <div class="field"><label for="${idPrefix}-prompt">Prompt</label><textarea id="${idPrefix}-prompt" placeholder="Paste or write the request..."></textarea></div>

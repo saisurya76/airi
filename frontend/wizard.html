@@ -6,7 +6,7 @@
   Steps that would otherwise require a real sign-in or leave demo junk
   in production data (Workspaces, consolidated report, comparison) are
   simulated with clearly-labeled sample data — labeled "Demo". Keep this
-  in sync with index.html/workspaces.html if their request/response
+  in sync with app.html/workspaces.html if their request/response
   shapes change.
 -->
 <!doctype html>
@@ -151,8 +151,8 @@
 <body>
   <div class="wrap">
     <div class="top-bar">
-      <a href="landing.html">← Back to AIRI</a>
-      <a href="index.html">Open the app →</a>
+      <a href="index.html">← Back to AIRI</a>
+      <a href="app.html">Open the app →</a>
     </div>
 
     <h1>AIRI in 12 steps</h1>
@@ -182,7 +182,7 @@
     </div>
 
     <div class="site-footer">
-      <a href="landing.html">AIRI home</a>
+      <a href="index.html">AIRI home</a>
       <a href="about.html">What's AIRI?</a>
       <a href="scenarios.html">Usage scenarios</a>
       <a href="developers.html">For developers</a>
@@ -676,7 +676,7 @@
     if (s.isFinal) {
       stepPanel.insertAdjacentHTML("beforeend", `
         <div class="finish-panel" style="margin-top:20px;">
-          <a class="btn" href="index.html">Open AIRI now →</a>
+          <a class="btn" href="app.html">Open AIRI now →</a>
         </div>
       `);
     }

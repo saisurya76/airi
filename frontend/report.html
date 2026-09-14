@@ -104,7 +104,7 @@
       </div>
       <div class="actions">
         <button id="downloadPdfBtn" class="hidden">Download PDF</button>
-        <a class="back-link" href="index.html">← Back to demo</a>
+        <a class="back-link" href="app.html">← Back to demo</a>
       </div>
     </div>
 
@@ -113,7 +113,7 @@
     <div id="emptyState" class="empty-state">
       <p>No report data found in this browser tab.</p>
       <p>Run the load-test demo on the main page first — this page displays whatever that demo just generated.</p>
-      <p style="margin-top:18px;"><a href="index.html" class="btn">Go run the demo →</a></p>
+      <p style="margin-top:18px;"><a href="app.html" class="btn">Go run the demo →</a></p>
     </div>
 
     <div id="frameWrap" class="frame-wrap hidden">
@@ -128,7 +128,7 @@
   </div>
 
 <script>
-  // Same split-hosting note as index.html: the API lives on Render, this
+  // Same split-hosting note as app.html: the API lives on Render, this
   // page on GitHub Pages. Update this if you redeploy the API elsewhere.
   const API_BASE = "https://airi-mvp-api.onrender.com";
   const REPORT_STORAGE_KEY = "airi_demo_report_payload";
@@ -146,10 +146,10 @@
 
   async function loadReport() {
     // localStorage, not sessionStorage — see the matching comment in
-    // index.html next to where this key is written: the link into this page
+    // app.html next to where this key is written: the link into this page
     // uses rel="noopener", which prevents a new tab from inheriting the
     // opener tab's sessionStorage at all, so sessionStorage here would always
-    // read back empty regardless of what index.html just wrote.
+    // read back empty regardless of what app.html just wrote.
     const raw = localStorage.getItem(REPORT_STORAGE_KEY);
     if (!raw) return; // emptyState stays visible
 
