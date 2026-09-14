@@ -182,6 +182,25 @@ def get_user_id_by_email(email: str) -> Optional[int]:
         return row["id"] if row else None
 
 
+def get_terms_accepted_at(user_id: int):
+    """None means this user hasn't accepted the current Terms & Conditions
+    yet (see sql/007_terms_acceptance.sql) — the frontend gates entry into
+    the signed-in app behind this, on both the OTP and member-access-code
+    login paths, since it's a per-account fact independent of which one
+    produced the current session."""
+    with _cursor() as cur:
+        cur.execute("SELECT terms_accepted_at FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        return row["terms_accepted_at"] if row else None
+
+
+def accept_terms(user_id: int) -> None:
+    """Records this user's acceptance of the current Terms & Conditions,
+    timestamped — an audit trail of consent, not just a client-side flag."""
+    with _cursor() as cur:
+        cur.execute("UPDATE users SET terms_accepted_at = now() WHERE id = %s", (user_id,))
+
+
 # ---------- user_profile (workspaces feature: the "app key" PIN) ----------
 
 def get_user_profile(user_id: int) -> Optional[dict]:

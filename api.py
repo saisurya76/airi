@@ -563,8 +563,9 @@ def verify_code_endpoint(body: VerifyCodeBody):
         raise HTTPException(status_code=400, detail="Incorrect code.")
 
     db.consume_code(row["id"])
-    db.upsert_user_login(email)
-    return {"token": create_session_token(email, secret), "email": email}
+    user_id = db.upsert_user_login(email)
+    terms_accepted = db.get_terms_accepted_at(user_id) is not None
+    return {"token": create_session_token(email, secret), "email": email, "terms_accepted": terms_accepted}
 
 
 @app.post("/auth/member-login")
@@ -601,20 +602,44 @@ def member_login(body: MemberLoginBody):
     if not matched:
         raise HTTPException(status_code=400, detail="Incorrect email or access code.")
 
-    db.upsert_user_login(email)
-    return {"token": create_session_token(email, secret), "email": email}
+    user_id = db.upsert_user_login(email)
+    terms_accepted = db.get_terms_accepted_at(user_id) is not None
+    return {"token": create_session_token(email, secret), "email": email, "terms_accepted": terms_accepted}
 
 
 @app.get("/auth/me")
 def auth_me(authorization: Optional[str] = Header(default=None)):
     """Lets the frontend check whether a stored token is still valid on
-    page load, without re-doing the OTP flow."""
+    page load, without re-doing the OTP flow. Also reports whether this
+    account has accepted the current Terms & Conditions yet, so a page
+    that resumes an existing session (rather than just having completed
+    one of the two login endpoints above) can still gate on it."""
     secret = _get_auth_secret()
     try:
         email = verify_session_token(extract_bearer_token(authorization), secret)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
-    return {"email": email}
+    terms_accepted = False
+    try:
+        user_id = db.get_user_id_by_email(email)
+        if user_id is not None:
+            terms_accepted = db.get_terms_accepted_at(user_id) is not None
+    except db.DatabaseNotConfigured:
+        pass
+    return {"email": email, "terms_accepted": terms_accepted}
+
+
+@app.post("/auth/accept-terms")
+def accept_terms_endpoint(authorization: Optional[str] = Header(default=None)):
+    """Records that the signed-in user has accepted the current Terms &
+    Conditions — called once, right after the frontend's accept-terms
+    gate, before it lets them into the signed-in app for the first time."""
+    user_id = _require_user_id(authorization)
+    try:
+        db.accept_terms(user_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"terms_accepted": True}
 
 
 # --- Workspaces / Projects (Phase 1 — see docs/WORKSPACES.md) ---

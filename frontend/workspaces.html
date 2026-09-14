@@ -237,7 +237,7 @@
     color: var(--muted);
     font-size: 12px;
   }
-  .site-footer a { color: var(--muted); text-decoration: underline; }
+  .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
 </style>
 </head>
@@ -446,8 +446,26 @@
       </div>
     </div>
 
+    <!-- ---------- Terms & Conditions gate (shown once per account, right after sign-in) ---------- -->
+    <div id="termsGateModal" class="modal-overlay hidden">
+      <div class="modal-box" style="max-width:440px;">
+        <h3>Terms &amp; Conditions</h3>
+        <p>
+          Before continuing, please review AIRI's
+          <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms &amp; Conditions</a>.
+          You only need to accept once per account.
+        </p>
+        <div id="termsGateError" class="error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="termsGateSignOutBtn" class="secondary-btn">Sign out instead</button>
+          <button type="button" id="termsGateAcceptBtn">I agree, continue</button>
+        </div>
+      </div>
+    </div>
+
     <div class="site-footer">
       <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
       <a href="developers.html">For developers</a>
     </div>
   </div>
@@ -537,6 +555,62 @@
     return data;
   }
 
+  // ---------- Terms & Conditions gate ----------
+  //
+  // Shown once per account, right after a successful sign-in (either the
+  // OTP flow or a team member's access code) or when resuming an
+  // already-signed-in session that predates acceptance — before letting
+  // the caller into the signed-in app. Resolves `true` once the current
+  // terms are accepted (recorded server-side via POST /auth/accept-terms,
+  // not just a local flag), or `false` if the person chose to sign out
+  // instead — callers should stop (signOut() has already reset the UI in
+  // that case) rather than proceed into enterApp().
+
+  const termsGateModal = document.getElementById("termsGateModal");
+  const termsGateError = document.getElementById("termsGateError");
+  const termsGateAcceptBtn = document.getElementById("termsGateAcceptBtn");
+  const termsGateSignOutBtn = document.getElementById("termsGateSignOutBtn");
+
+  function showTermsGate() {
+    return new Promise((resolve) => {
+      termsGateError.classList.add("hidden");
+      termsGateModal.classList.remove("hidden");
+
+      function cleanup() {
+        termsGateAcceptBtn.removeEventListener("click", onAccept);
+        termsGateSignOutBtn.removeEventListener("click", onDecline);
+      }
+
+      async function onAccept() {
+        termsGateError.classList.add("hidden");
+        termsGateAcceptBtn.disabled = true;
+        termsGateAcceptBtn.textContent = "Saving…";
+        try {
+          await apiFetch("/auth/accept-terms", { method: "POST" });
+          cleanup();
+          termsGateModal.classList.add("hidden");
+          resolve(true);
+        } catch (e) {
+          termsGateError.textContent = e.message;
+          termsGateError.classList.remove("hidden");
+        } finally {
+          termsGateAcceptBtn.disabled = false;
+          termsGateAcceptBtn.textContent = "I agree, continue";
+        }
+      }
+
+      function onDecline() {
+        cleanup();
+        termsGateModal.classList.add("hidden");
+        signOut();
+        resolve(false);
+      }
+
+      termsGateAcceptBtn.addEventListener("click", onAccept);
+      termsGateSignOutBtn.addEventListener("click", onDecline);
+    });
+  }
+
   // ---------- sign-in (OTP) ----------
 
   async function requestCode() {
@@ -592,6 +666,7 @@
       authEmail = data.email;
       localStorage.setItem(AUTH_TOKEN_KEY, authToken);
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      if (!data.terms_accepted && !(await showTermsGate())) return;
       await enterApp();
     } catch (e) {
       authError2.textContent = e.message;
@@ -650,6 +725,7 @@
       authEmail = data.email;
       localStorage.setItem(AUTH_TOKEN_KEY, authToken);
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      if (!data.terms_accepted && !(await showTermsGate())) return;
       await enterApp();
     } catch (e) {
       authErrorMember.textContent = e.message;
@@ -1909,6 +1985,7 @@
       const data = await res.json();
       authEmail = data.email;
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      if (!data.terms_accepted && !(await showTermsGate())) return;
       await enterApp();
     } catch (e) {
       signOut();

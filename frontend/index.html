@@ -83,7 +83,23 @@
   .bar-track { height: 8px; border-radius: 4px; background: #262a33; overflow: hidden; margin-top: 8px; }
   .bar-fill { height: 100%; border-radius: 4px; }
   .meta { color: var(--muted); font-size: 12px; margin-top: 14px; }
-  .hidden { display: none; }
+  .hidden { display: none !important; }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50;
+  }
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px;
+    max-width: 440px;
+    width: 100%;
+  }
+  .modal-box p { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .modal-actions button { flex: 1; }
 
   .flavor-bar {
     display: flex;
@@ -94,6 +110,7 @@
     margin-bottom: 18px;
   }
   .flavor-toggle { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
+  .nav-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .flavor-pill {
     margin: 0;
     background: transparent;
@@ -264,8 +281,6 @@
       <div class="nav-links">
         <a href="about.html">What's AIRI?</a>
         <a href="author.html" class="author-link">Author</a>
-        <span class="nav-divider"></span>
-        <a href="workspaces.html" class="workspaces-link">Workspaces</a>
       </div>
     </div>
     <div class="flavor-bar">
@@ -273,10 +288,13 @@
         <button type="button" id="flavorStandardBtn" class="flavor-pill active">Standard</button>
         <button type="button" id="flavorExactBtn" class="flavor-pill">Exact ▸</button>
       </div>
-      <div id="authStatus" class="auth-status hidden">
-        <span id="authEmailLabel"></span>
-        <button type="button" id="manageKeysBtn" class="link-btn hidden">Manage keys</button>
-        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+      <div class="nav-right">
+        <div id="authStatus" class="auth-status hidden">
+          <span id="authEmailLabel"></span>
+          <button type="button" id="manageKeysBtn" class="link-btn hidden">Manage keys</button>
+          <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+        </div>
+        <a href="workspaces.html" class="workspaces-link">Workspaces</a>
       </div>
     </div>
 
@@ -487,8 +505,26 @@
       <p class="meta">Opens in a new tab: the full HTML report, plus a "Download PDF" button.</p>
     </div>
 
+    <!-- ---------- Terms & Conditions gate (shown once per account, right after sign-in) ---------- -->
+    <div id="termsGateModal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <h3>Terms &amp; Conditions</h3>
+        <p>
+          Before continuing, please review AIRI's
+          <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms &amp; Conditions</a>.
+          You only need to accept once per account.
+        </p>
+        <div id="termsGateError" class="error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" id="termsGateSignOutBtn" class="secondary-btn">Sign out instead</button>
+          <button type="button" id="termsGateAcceptBtn">I agree, continue</button>
+        </div>
+      </div>
+    </div>
+
     <div class="site-footer">
       <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
       <a href="developers.html">For developers</a>
     </div>
   </div>
@@ -662,6 +698,10 @@
   const testModeNoteEl = document.getElementById("testModeNote");
   const byokPanelEl = document.getElementById("byokPanel");
   const manageKeysBtn = document.getElementById("manageKeysBtn");
+  const termsGateModal = document.getElementById("termsGateModal");
+  const termsGateError = document.getElementById("termsGateError");
+  const termsGateAcceptBtn = document.getElementById("termsGateAcceptBtn");
+  const termsGateSignOutBtn = document.getElementById("termsGateSignOutBtn");
 
   async function loadConfig() {
     try {
@@ -760,6 +800,61 @@
     setFlavor("standard");
   }
 
+  // ---------- Terms & Conditions gate ----------
+  //
+  // Shown once per account, right after a successful sign-in or when
+  // resuming an already-signed-in session that predates acceptance —
+  // before switching into Exact mode. Resolves `true` once the current
+  // terms are accepted (recorded server-side via POST /auth/accept-terms,
+  // not just a local flag), or `false` if the person chose to sign out
+  // instead — callers should stop rather than proceed into Exact mode.
+  function showTermsGate() {
+    return new Promise((resolve) => {
+      termsGateError.classList.add("hidden");
+      termsGateModal.classList.remove("hidden");
+
+      function cleanup() {
+        termsGateAcceptBtn.removeEventListener("click", onAccept);
+        termsGateSignOutBtn.removeEventListener("click", onDecline);
+      }
+
+      async function onAccept() {
+        termsGateError.classList.add("hidden");
+        termsGateAcceptBtn.disabled = true;
+        termsGateAcceptBtn.textContent = "Saving…";
+        try {
+          const res = await fetch(`${API_BASE}/auth/accept-terms`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || "Could not save that — try again.");
+          }
+          cleanup();
+          termsGateModal.classList.add("hidden");
+          resolve(true);
+        } catch (e) {
+          termsGateError.textContent = e.message;
+          termsGateError.classList.remove("hidden");
+        } finally {
+          termsGateAcceptBtn.disabled = false;
+          termsGateAcceptBtn.textContent = "I agree, continue";
+        }
+      }
+
+      function onDecline() {
+        cleanup();
+        termsGateModal.classList.add("hidden");
+        signOut();
+        resolve(false);
+      }
+
+      termsGateAcceptBtn.addEventListener("click", onAccept);
+      termsGateSignOutBtn.addEventListener("click", onDecline);
+    });
+  }
+
   async function checkExistingSession() {
     if (!authToken) return;
     try {
@@ -768,6 +863,7 @@
       const data = await res.json();
       authEmail = data.email;
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      if (!data.terms_accepted && !(await showTermsGate())) return;
       renderAuthStatus();
       byokPanelOpen = !hasAnyByokKeyStored();
       setFlavor("exact");
@@ -865,6 +961,7 @@
       authEmail = data.email;
       localStorage.setItem(AUTH_TOKEN_KEY, authToken);
       localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+      if (!data.terms_accepted && !(await showTermsGate())) return;
       renderAuthStatus();
       byokPanelOpen = !hasAnyByokKeyStored();
       setFlavor("exact");
