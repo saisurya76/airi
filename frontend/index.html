@@ -235,8 +235,8 @@
     color: var(--text);
     text-decoration: none;
     font-weight: 800;
-    font-size: 13px;
-    letter-spacing: 0.3px;
+    font-size: 19px;
+    letter-spacing: 0.4px;
   }
   .top-nav .brand-link:hover { color: var(--accent); }
   .top-nav .nav-links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
@@ -251,17 +251,19 @@
     font-weight: 700;
   }
   .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: #0f1115; }
-  .top-nav a.workspaces-link {
+  a.workspaces-link {
     background: rgba(110,168,254,0.12);
     border: 1px solid rgba(110,168,254,0.5);
     color: var(--accent);
     padding: 5px 14px;
     border-radius: 999px;
     font-weight: 700;
+    text-decoration: none;
+    font-size: 12px;
   }
-  .top-nav a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
-  .top-nav a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
-  .top-nav a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
+  a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
+  a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
   .site-footer {
     margin-top: 40px;
     padding-top: 16px;

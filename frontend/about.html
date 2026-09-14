@@ -62,7 +62,7 @@
     border-radius: 6px;
     font-size: 12.5px;
   }
-  code { padding: 1px 5px; }
+  code { padding: 1px 5px; overflow-wrap: break-word; }
   pre { padding: 12px 14px; overflow-x: auto; margin: 10px 0 0; }
   pre code { border: none; padding: 0; background: none; }
   a { color: var(--accent); }
@@ -230,6 +230,14 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
       the estimation math in-process, a compiled build of the core library) — see the
       <a href="developers.html">Developers page</a> for API access, the compiled-library download,
       and the full endpoint reference.</p>
+    </div>
+
+    <h2><span class="step-num">6</span>See it by project type</h2>
+    <div class="panel">
+      <p>Six concrete project types — a support chatbot, a RAG app, a coding assistant, a
+      multi-tenant SaaS, a batch pipeline, a CI cost gate — each with the exact steps to wire in
+      and what becomes measurable once you have, on the new
+      <a href="scenarios.html">Usage scenarios page</a>.</p>
     </div>
 
     <p class="note" style="margin-top:28px;">

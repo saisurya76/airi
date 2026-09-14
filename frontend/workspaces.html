@@ -90,7 +90,7 @@
   .otp-input { letter-spacing: 0.3em; font-size: 18px; text-align: center; }
 
   .top-nav { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 14px; font-size: 12px; flex-wrap: wrap; }
-  .top-nav .brand-link { color: var(--text); text-decoration: none; font-weight: 800; font-size: 13px; letter-spacing: 0.3px; }
+  .top-nav .brand-link { color: var(--text); text-decoration: none; font-weight: 800; font-size: 19px; letter-spacing: 0.4px; }
   .top-nav .brand-link:hover { color: var(--accent); }
   .top-nav .nav-links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .top-nav .nav-divider { width: 1px; height: 16px; background: var(--border); }
@@ -104,19 +104,23 @@
     font-weight: 700;
   }
   .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: #0f1115; }
-  .top-nav a.workspaces-link {
+  a.workspaces-link {
     background: rgba(110,168,254,0.12);
     border: 1px solid rgba(110,168,254,0.5);
     color: var(--accent);
     padding: 5px 14px;
     border-radius: 999px;
     font-weight: 700;
+    text-decoration: none;
+    font-size: 12px;
   }
-  .top-nav a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
-  .top-nav a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
-  .top-nav a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
+  a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
+  a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
 
-  .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+  .secondary-nav { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 18px; }
+  .nav-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
 
   .app-key-row { display: flex; gap: 8px; align-items: center; }
   .app-key-row input { flex: 1; letter-spacing: 0.3em; font-size: 16px; }
@@ -248,7 +252,14 @@
       <div class="nav-links">
         <a href="about.html">What's AIRI?</a>
         <a href="author.html" class="author-link">Author</a>
-        <span class="nav-divider"></span>
+      </div>
+    </div>
+    <div class="secondary-nav">
+      <div class="nav-right">
+        <div id="authStatus" class="auth-status hidden">
+          <span id="authEmailLabel"></span>
+          <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+        </div>
         <a href="workspaces.html" class="workspaces-link active">Workspaces</a>
       </div>
     </div>
@@ -295,11 +306,6 @@
 
     <!-- ---------- Signed-in app ---------- -->
     <div id="appView" class="hidden">
-      <div class="auth-status">
-        <span id="authEmailLabel"></span>
-        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
-      </div>
-
       <!-- Profile / app key -->
       <div class="panel">
         <h2>Your app key</h2>
@@ -513,6 +519,7 @@
 
   const signInView = document.getElementById("signInView");
   const appView = document.getElementById("appView");
+  const authStatus = document.getElementById("authStatus");
   const authStep1 = document.getElementById("authStep1");
   const authStep2 = document.getElementById("authStep2");
   const authError1 = document.getElementById("authError1");
@@ -530,6 +537,7 @@
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_EMAIL_KEY);
     appView.classList.add("hidden");
+    authStatus.classList.add("hidden");
     signInView.classList.remove("hidden");
     // Reset back to the default (email+OTP) step, whichever step was
     // showing when they signed out.
@@ -1949,6 +1957,7 @@
   async function enterApp() {
     signInView.classList.add("hidden");
     appView.classList.remove("hidden");
+    authStatus.classList.remove("hidden");
     document.getElementById("authEmailLabel").textContent = `Signed in as ${authEmail}`;
 
     techStackCategories = await apiFetch("/projects/tech-stack-categories").catch(() => ({}));

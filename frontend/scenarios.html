@@ -1,0 +1,301 @@
+<!--
+  Usage scenarios by project type. Companion to about.html: that page
+  explains what each part of AIRI does, this one shows six concrete
+  project types wiring those parts together, with the exact steps and
+  what becomes measurable once it's in. Keep this in sync with
+  about.html and developers.html when endpoints/fields change.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — Usage scenarios</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  .top-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .top-bar a:hover { text-decoration: underline; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  h2 { font-size: 17px; margin: 36px 0 4px; color: var(--text); }
+  h2 .type-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: #0f1115; font-size: 12px; font-weight: 700;
+    margin-right: 8px; vertical-align: middle;
+  }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 10px 0 0;
+  }
+  .panel p:first-child { margin-top: 0; }
+  .panel p:last-child { margin-bottom: 0; }
+  .panel ol, .panel ul { margin: 10px 0 0; padding-left: 20px; }
+  .panel li { margin-bottom: 6px; }
+  .panel h3 { font-size: 13px; margin: 16px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .panel h3:first-child { margin-top: 0; }
+  code, pre {
+    background: #0f1115;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12.5px;
+    overflow-wrap: break-word;
+  }
+  code { padding: 1px 5px; }
+  a { color: var(--accent); }
+  .note {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 10px;
+    background: rgba(122,162,255,0.08);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .cta-row { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; gap: 14px; flex-wrap: wrap; }
+  .cta-row a.btn {
+    background: var(--accent); color: #0f1115; text-decoration: none;
+    border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 600;
+  }
+  .cta-row a.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .site-footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
+  .site-footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar"><a href="index.html">← Back to AIRI</a></div>
+
+    <h1>Usage scenarios by project type</h1>
+    <p class="sub">
+      Six concrete project types, each with the exact AIRI calls to wire in and what becomes
+      measurable once you have — not hypothetical benchmarks, just the metrics each endpoint's
+      own response already hands you. See <a href="about.html">What is AIRI?</a> for what each
+      piece does, and the <a href="developers.html">Developers page</a> for the full API
+      reference every step below links back to.
+    </p>
+
+    <h2><span class="type-num">1</span>Customer support / AI helpdesk chatbot</h2>
+    <div class="panel">
+      <p>Every inbound message goes to an LLM before a human sees it — one bad week (a viral
+      thread, an outage spawning duplicate tickets) can spike the bill overnight if nothing
+      checks size or cost per call first.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before generating a reply, send the message + conversation history to
+        <code>/analyze</code> (or <code>/analyze/exact</code> once signed in, for real
+        Claude/Gemini counts) with the model you'll actually use.</li>
+        <li>If <code>status</code> comes back <code>EXCEEDED</code>, summarize or drop older
+        turns rather than sending an oversized request and letting the provider reject it.</li>
+        <li>Tag each real call's result with a <code>label</code> per queue (e.g. "billing",
+        "technical") as it happens through the day.</li>
+        <li>At shift end, POST the collected records to <code>/report</code> (or
+        <code>/report/pdf</code> for a shareable summary) for a per-queue breakdown.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per conversation — <code>total_cost / total_requests</code> from
+        <code>/report</code>, tracked per queue via <code>by_label</code>.</li>
+        <li>Overflow rate — <code>status_counts.EXCEEDED / total_requests</code>, which should
+        trend toward zero once trimming logic is in place.</li>
+        <li><code>avg_tokens_per_request</code> over time, per queue — catches a macro or
+        canned-response template that's silently bloating prompts.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">2</span>RAG / knowledge-base Q&amp;A app</h2>
+    <div class="panel">
+      <p>Retrieval quality drives prompt size directly — too many or too-large retrieved chunks
+      and you're paying to feed context the model barely uses, or blowing past its window
+      outright.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>After retrieval, assemble the candidate prompt (query + top-k chunks) and run
+        <code>/analyze</code> before generation, not after.</li>
+        <li>Use the response's <code>context_utilization</code> to right-size k — if it
+        consistently sits well under the window, fewer chunks (or a smaller-window model) likely
+        does the same job for less.</li>
+        <li>On <code>WARNING</code>/<code>EXCEEDED</code>, drop chunks or route to a
+        bigger-window model before ever calling the LLM.</li>
+        <li>Run <code>/project</code> with a few representative query archetypes and expected
+        monthly volume to forecast the pipeline's total spend before shipping.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>The live distribution of <code>context_utilization</code> — how close to the ceiling
+        real requests actually run.</li>
+        <li><code>WARNING</code> + <code>EXCEEDED</code> share of traffic, which should fall as
+        chunk-count tuning improves.</li>
+        <li>Projected vs. actual monthly cost — <code>/project</code>'s forecast against a real
+        <code>/report</code> built from production traffic.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">3</span>AI coding assistant / IDE plugin</h2>
+    <div class="panel">
+      <p>Sending relevant file/code context alongside a prompt is what makes a coding assistant
+      useful — and also the single biggest lever on both cost and whether the request fits the
+      model's window at all.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before sending a completion/chat request, run <code>/analyze</code> with the
+        assembled prompt (open files + selection + conversation) against the target model.</li>
+        <li>On <code>EXCEEDED</code>, fall back to summarized distant context or a bigger-window
+        model instead of letting the provider reject the call.</li>
+        <li>If the product supports BYOK Claude/Gemini keys, use <code>/analyze/exact</code> so
+        the token count shown to a developer is the provider's own number, not an estimate.</li>
+        <li>Label every real request by feature (autocomplete, chat, refactor) and consolidate
+        with <code>/report</code> weekly to see which feature actually drives spend.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li><code>known_model</code> + <code>confidence</code> on each response — flags requests
+        silently using the heuristic fallback instead of a real provider count.</li>
+        <li>Cost per feature via <code>by_label</code> — autocomplete vs. chat vs. refactor.</li>
+        <li><code>EXCEEDED</code> count trend after adding a context-trimming step — should drop
+        toward zero.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">4</span>Multi-tenant content-generation SaaS</h2>
+    <div class="panel">
+      <p>A platform generating blog posts, ad copy, or product listings on behalf of many
+      customers needs per-customer cost visibility — both to price plans sanely and to catch one
+      runaway customer before it eats the month's margin.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Create one <a href="workspaces.html">Workspace</a> per customer (or per internal
+        team), and route every generation call through that project's
+        <code>/projects/{id}/tools/analyze/runs</code> (or <code>tools/exact/runs</code> for
+        BYOK) endpoint so each result is saved against that customer automatically.</li>
+        <li>Enforce per-plan limits in your own app logic using each call's
+        <code>estimated_cost</code>/<code>status</code> before committing to the send.</li>
+        <li>Pull <code>GET /projects/{id}/report/consolidated</code> per customer for real
+        usage-to-date, and <code>GET /workspaces/{id}/comparison</code> to rank customers by
+        spend across the whole workspace.</li>
+        <li>Export either as a downloadable PDF (<code>.../report/consolidated.pdf</code>,
+        <code>.../comparison.pdf</code>) for finance or a customer-facing usage statement.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per customer per billing period, straight from each project's consolidated
+        report — no separate cost-tracking system needed.</li>
+        <li>A ranked, workspace-wide comparison to spot the top spenders before the invoice
+        run.</li>
+        <li>Plan-limit breach rate — how often a customer's calls land as
+        <code>WARNING</code>/<code>EXCEEDED</code> against their allotted budget.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">5</span>Batch / ETL document summarization pipeline</h2>
+    <div class="panel">
+      <p>A nightly job summarizing logs, transcripts, or documents at volume fails expensively
+      when it dies partway through a long run — and by the time anyone notices, that night's AI
+      spend is already gone.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before each item enters the batch, run a quick <code>/analyze</code> pass (or use
+        the core <code>airi</code> library in-process, via the compiled download on the
+        <a href="developers.html">Developers page</a>, if the pipeline is Python and shouldn't
+        take on a network dependency) to catch oversized documents up front.</li>
+        <li>Route oversized items into a chunk-summarize-then-combine pattern instead of one call
+        that would exceed the window.</li>
+        <li>Collect every item's result with a <code>phase</code> tag ("normal" vs. a
+        backlog-catchup run) and a <code>timestamp</code>, then POST the full batch to
+        <code>/report</code> once the job finishes.</li>
+        <li>Watch <code>duration_seconds</code>/<code>requests_per_second</code> alongside
+        <code>total_cost</code> — a run that's both slower and pricier than last time usually
+        means something upstream changed (bigger documents, a model swap).</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li><code>EXCEEDED</code> items caught pre-flight vs. what would have failed mid-batch —
+        the whole point of checking ahead of the call, not after.</li>
+        <li><code>total_cost</code> and <code>total_tokens</code> night-over-night, to catch
+        drift before it becomes a surprise on the monthly bill.</li>
+        <li><code>requests_per_second</code> as a pipeline health signal, not just a cost
+        one.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">6</span>CI/CD cost-and-context regression gate</h2>
+    <div class="panel">
+      <p>Prompt templates and RAG context drift as people ship features — a gate that measures
+      the change in cost/context footprint before merge catches that drift in review, not after
+      a bill spikes in production.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>In CI, run your project's real prompt-construction code against a fixed set of
+        representative inputs and POST each result to <code>/analyze</code> (or the compiled
+        core library in-process — no network dependency needed for the check itself).</li>
+        <li>Fail the build (or just warn) if <code>status</code> flips from <code>SAFE</code> to
+        <code>WARNING</code>/<code>EXCEEDED</code> for any fixed input, or if
+        <code>estimated_cost</code> rises past a set threshold versus the last merged run.</li>
+        <li>Consolidate the run's results into a <code>/report</code> and archive it (or
+        <code>/report/pdf</code>) as a build artifact, so a reviewer can see exactly what
+        changed.</li>
+        <li>For a fleet-wide view before a broad rollout, run <code>/project</code> with the
+        team's known call-sites and expected volumes to forecast the change's total cost impact.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Per-fixed-input <code>estimated_cost</code> delta between builds — a real, comparable
+        number reviewers can look at in a diff.</li>
+        <li><code>status</code> flips (<code>SAFE</code>→<code>WARNING</code>/<code>EXCEEDED</code>)
+        per PR — a leading indicator, not a lagging one.</li>
+        <li>Projected fleet-wide cost delta via <code>/project</code>, before a prompt or model
+        change ships broadly.</li>
+      </ul>
+    </div>
+
+    <p class="note" style="margin-top:28px;">
+      Every metric above comes straight off a response AIRI already returns — nothing here needs
+      a separate analytics pipeline. Mix and match across scenarios freely; most real projects
+      are a combination of two or three of these, not just one.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn" href="index.html">Try it now →</a>
+      <a class="btn secondary" href="developers.html">Developers →</a>
+    </div>
+
+    <div class="site-footer">
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="developers.html">For developers</a>
+    </div>
+  </div>
+</body>
+</html>
