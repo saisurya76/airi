@@ -19,7 +19,10 @@ workspace's admin signs in with email + OTP (see
 workspace-scoped access code their admin gave them (`POST
 /auth/member-login` — see "Team-member access" below). Neither touches
 `/analyze`, `/project`, `/report*`, which remain completely anonymous
-and stateless.
+and stateless. Either login path is also subject to the one-time Terms
+& Conditions gate described in
+[docs/EXACT_MODE.md](EXACT_MODE.md#terms--conditions-gate) — it's
+account-wide, not specific to this feature.
 
 ## Data model
 
@@ -458,7 +461,7 @@ over rather than just paused.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /auth/member-login` | Body `{"email", "code"}`. `400` on a wrong email/code pair (never distinguishes which). Returns `{"token", "email"}`, same shape as `POST /auth/verify-code`. |
+| `POST /auth/member-login` | Body `{"email", "code"}`. `400` on a wrong email/code pair (never distinguishes which). Returns `{"token", "email", "terms_accepted"}`, same shape as `POST /auth/verify-code`. |
 | `POST /workspaces/{id}/members/{member_id}/disable` | Admin-only. Revokes access, keeps history. |
 | `POST /workspaces/{id}/members/{member_id}/enable` | Admin-only. Restores access with the existing code. |
 | `POST /workspaces/{id}/members/{member_id}/regenerate-code` | Admin-only. New code (returned once as `access_code`), old one invalidated. |

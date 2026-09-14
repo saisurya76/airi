@@ -451,8 +451,12 @@ cap (max 5/24h) hit for this email; `502` the email couldn't be sent;
 
 **Request**: `{"email": "you@example.com", "code": "042817"}`
 
-**Response 200**: `{"token": "<jwt>", "email": "you@example.com"}` — send
-`token` back as `Authorization: Bearer <token>` on the two endpoints below.
+**Response 200**: `{"token": "<jwt>", "email": "you@example.com", "terms_accepted": false}`
+— send `token` back as `Authorization: Bearer <token>` on the endpoints
+below. `terms_accepted` is `false` until this account has accepted the
+current Terms & Conditions (see [docs/EXACT_MODE.md](EXACT_MODE.md#terms--conditions-gate))
+— the frontend gates entry into Exact mode/Workspaces behind that, but
+the token itself is fully valid either way.
 
 **Errors**: `400` no code requested / wrong code / too many attempts (5
 max) / code expired (10 min); `503` not configured.
@@ -461,8 +465,24 @@ max) / code expired (10 min); `503` not configured.
 
 **Header**: `Authorization: Bearer <token>`
 
-**Response 200**: `{"email": "you@example.com"}` — lets a client check a
-stored token is still valid without repeating the OTP flow.
+**Response 200**: `{"email": "you@example.com", "terms_accepted": true}`
+— lets a client check a stored token is still valid, and whether this
+account still needs the terms gate, without repeating the OTP flow.
+
+**Errors**: `401` missing/invalid/expired token; `503` not configured
+(`terms_accepted` conservatively reports `false` if the database itself
+is unreachable, rather than failing the whole call).
+
+### `POST /auth/accept-terms`
+
+**Header**: `Authorization: Bearer <token>`
+
+Records that the signed-in account has accepted the current Terms &
+Conditions — see [docs/EXACT_MODE.md](EXACT_MODE.md#terms--conditions-gate)
+for the full flow. Idempotent: accepting again just refreshes the
+timestamp.
+
+**Response 200**: `{"terms_accepted": true}`
 
 **Errors**: `401` missing/invalid/expired token; `503` not configured.
 
@@ -535,7 +555,7 @@ hitting an admin-only action, or a *disabled* member hitting anything →
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /auth/member-login` | Body `{"email", "code"}` — a team member's sign-in with their admin-issued access code. `400` on a wrong pair. Returns `{"token", "email"}`, same shape as `/auth/verify-code` |
+| `POST /auth/member-login` | Body `{"email", "code"}` — a team member's sign-in with their admin-issued access code. `400` on a wrong pair. Returns `{"token", "email", "terms_accepted"}`, same shape as `/auth/verify-code` |
 | `GET /profile` | `{"has_app_key": bool}` — never the key or its hash |
 | `POST /profile/app-key` | Body `{"app_key": "1234"}` (exactly 4 digits) — sets/changes it; `400` if malformed |
 | `GET /workspaces` | Every workspace this user can reach — owned (`role: "admin"`) or as an active member (`role: "member"`) — with `member_count`/`project_count` |

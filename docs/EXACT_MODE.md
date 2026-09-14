@@ -124,9 +124,10 @@ thing to fix, not a deployment gap).
    leaking who's used AIRI before.
 2. `POST /auth/verify-code` `{"email": "...", "code": "..."}` — checks
    the code against the stored hash. On success, returns a signed
-   session token (JWT, 30-day expiry) and marks the code consumed
-   (single-use). On failure, increments an attempt counter (max 5
-   attempts per code).
+   session token (JWT, 30-day expiry), whether this account has
+   accepted the current Terms & Conditions yet (`terms_accepted` — see
+   below), and marks the code consumed (single-use). On failure,
+   increments an attempt counter (max 5 attempts per code).
 3. Store the token client-side (the try-it page uses `localStorage`)
    and send it as `Authorization: Bearer <token>` on
    `POST /analyze/exact` and `GET /auth/me`.
@@ -138,6 +139,39 @@ never on every `/analyze/exact` call.
 
 Full request/response reference for all four endpoints:
 [docs/API.md](API.md#exact-flavor-auth--analyzeexact).
+
+## Terms & Conditions gate
+
+A newer, small addition on top of the flow above: the first time an
+account signs in — via email+OTP here, or via a team member's access
+code (see [docs/WORKSPACES.md](WORKSPACES.md#team-member-access-phase-5))
+— the frontend shows a one-time modal asking them to accept AIRI's
+[Terms & Conditions](../frontend/terms.html) before it lets them into
+Exact mode or Workspaces. A few things worth knowing:
+
+- **It's account-wide, not per-page or per-login-path.** Accepting once
+  on `frontend/index.html` means `frontend/workspaces.html` won't ask
+  again for that same account, and vice versa — both check the same
+  `terms_accepted` flag.
+- **Acceptance is recorded server-side** (`users.terms_accepted_at`,
+  `sql/007_terms_acceptance.sql`), not just a `localStorage` flag — an
+  actual timestamped record, so it survives a new browser or device and
+  means something as a record of consent.
+- `POST /auth/verify-code`, `POST /auth/member-login`, and `GET
+  /auth/me` all report `terms_accepted` — the frontend checks it right
+  after any of the three and shows the gate if it's `false`.
+  `POST /auth/accept-terms` (session-authenticated) records the accept.
+- **Declining signs the account out** — there's no "skip for now"; the
+  frontend's gate offers only "I agree, continue" or "Sign out
+  instead." The session token itself was still fully valid either way —
+  this is a frontend-enforced gate, not an extra auth requirement on
+  the API side (nothing else 401s or 403s for an unaccepted account).
+- If the terms change materially in the future, re-gating everyone is a
+  matter of clearing `terms_accepted_at` (or adding a version column and
+  comparing against it) — not built yet, since there's only been one
+  version so far.
+
+Full reference: [docs/API.md](API.md#post-authaccept-terms).
 
 ## Rate limits (built in, not configurable via env vars)
 

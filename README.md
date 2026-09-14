@@ -20,8 +20,9 @@ build intentionally skips.
   `/analyze/exact`): request/response schemas and error formats.
 - **[docs/EXACT_MODE.md](docs/EXACT_MODE.md)** — the opt-in "Exact"
   flavor (real Claude/Gemini token counts via email+OTP sign-in): why
-  it's gated, why it's zero-cost even at peak traffic, and one-time
-  setup (Neon, Resend, Anthropic/Google keys).
+  it's gated, why it's zero-cost even at peak traffic, one-time setup
+  (Neon, Resend, Anthropic/Google keys), and the account-wide Terms &
+  Conditions acceptance gate shared with Workspaces.
 - **[docs/ADMIN.md](docs/ADMIN.md)** — the password-gated admin page
   (`frontend/admin.html`): the test-mode ↔ BYOK toggle for Exact mode,
   the founder/author profile shown on `frontend/author.html`, and the
@@ -83,10 +84,11 @@ print(result.to_dict())
 Run the sanity tests any time with `python3 tests/test_analyzer.py`,
 `python3 tests/test_projector.py`, `python3 tests/test_report.py`,
 `python3 tests/test_auth.py`, `python3 tests/test_exact_provider.py`,
-`python3 tests/test_runtime_config.py`, `python3 tests/test_author.py`,
-`python3 tests/test_workspaces.py`, `python3 tests/test_tool_runs.py`,
-`python3 tests/test_notes.py`, `python3 tests/test_consolidated_report.py`,
-and `python3 tests/test_comparison.py`
+`python3 tests/test_email_provider.py`, `python3 tests/test_runtime_config.py`,
+`python3 tests/test_author.py`, `python3 tests/test_workspaces.py`,
+`python3 tests/test_tool_runs.py`, `python3 tests/test_notes.py`,
+`python3 tests/test_consolidated_report.py`, and
+`python3 tests/test_comparison.py`
 (none of these need a database/network — they test pure logic and
 mocked HTTP calls), or all at once with `pytest tests/ -q`.
 
@@ -113,7 +115,7 @@ airi/                   core library — zero web/db/cloud dependencies
   notes.py                API-layer only: note-body validation for a project's comment history (pure logic)
   consolidated_report.py  API-layer only: rolls up a project's saved tool runs + notes into one report, plus a single-run PDF template; HTML/PDF templates included (pure logic)
   comparison.py           API-layer only: rolls up every project in a workspace (reusing consolidated_report's per-run normalization) into a ranked cross-project comparison, HTML/PDF template included (pure logic)
-api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*(incl. /auth/member-login), /analyze/exact, /config, /admin/*, /author, /download, /models, /health, /profile, /workspaces/*(+/members/*(/disable,/enable,/regenerate-code), +/comparison(.pdf)), /projects/*(+/tools/*/runs(+/pdf), +/notes, +/report/consolidated(.pdf))
+api.py                  FastAPI: /analyze, /project, /report(+/html,+/pdf), /auth/*(request-code,verify-code,me,accept-terms,member-login), /analyze/exact, /config, /admin/*, /author, /download, /models, /health, /profile, /workspaces/*(+/members/*(/disable,/enable,/regenerate-code), +/comparison(.pdf)), /projects/*(+/tools/*/runs(+/pdf), +/notes, +/report/consolidated(.pdf))
 frontend/index.html    try-it-out page (analyze + Standard/Exact toggle + BYOK key panel + traffic projection + load-test demo)
 frontend/report.html   load-test report viewer (HTML view + PDF download), fed by the demo section above
 frontend/admin.html    password-gated admin page: test-mode/BYOK toggle + deployment checklist + author-profile editor
@@ -121,6 +123,7 @@ frontend/about.html    "What's AIRI?" — living usage guide, updated whenever a
 frontend/developers.html  API quick reference + compiled-core-library download button (GET /download; source is not distributed)
 frontend/author.html   public founder/about page, built entirely from the admin-edited author profile
 frontend/privacy.html  privacy policy, linked from every page's footer
+frontend/terms.html    terms & conditions, linked from every page's footer — also what the one-time post-sign-in acceptance gate points to
 frontend/workspaces.html  signed-in workspaces/projects app (Phase 1: CRUD + app-key delete confirmation; Phase 2: AIRI tools runnable per project with saved run history; Phase 3: Dashboard/Notes/Actions tabs + downloadable consolidated PDF report; Phase 4: cross-project comparison tab + PDF report + per-run PDF downloads; Phase 5: real team-member access — admin/member roles, access-code sign-in, disable/enable/regenerate)
 sql/001_auth_schema.sql  Neon schema for the "Exact" flavor's users/otp_codes tables
 sql/002_app_config.sql  Neon schema for the admin-configurable settings table (test-mode + author profile)
@@ -128,8 +131,9 @@ sql/003_workspaces_schema.sql  Neon schema for user_profile/workspaces/workspace
 sql/004_project_tool_runs.sql  Neon schema for saved per-project AIRI tool runs
 sql/005_project_notes.sql  Neon schema for a project's notes/comments history
 sql/006_workspace_member_access.sql  Neon schema adding real team-member access (user_id/status/access_code_hash) to workspace_members
+sql/007_terms_acceptance.sql  Neon schema adding terms_accepted_at to users, for the account-wide Terms & Conditions gate
 tests/                  sanity checks for every module above
-docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup), ADMIN.md (test-mode/BYOK admin page), WORKSPACES.md (workspaces/projects Phases 1-5)
+docs/                   API.md (full endpoint reference), INTEGRATION.md (pipeline integration), EXACT_MODE.md (auth + exact-mode setup + terms gate), ADMIN.md (test-mode/BYOK admin page), WORKSPACES.md (workspaces/projects Phases 1-5)
 ```
 
 The core library never imports FastAPI, and never makes a network call
