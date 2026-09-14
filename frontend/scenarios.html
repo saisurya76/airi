@@ -45,6 +45,8 @@
     margin-right: 8px; vertical-align: middle;
   }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .section-divider { margin-top: 48px; padding-top: 28px; border-top: 1px solid var(--border); }
+  .divider-heading { font-size: 20px; margin: 0 0 6px; color: var(--text); }
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -277,6 +279,200 @@
         per PR — a leading indicator, not a lagging one.</li>
         <li>Projected fleet-wide cost delta via <code>/project</code>, before a prompt or model
         change ships broadly.</li>
+      </ul>
+    </div>
+
+    <div class="section-divider">
+      <h2 class="divider-heading">One company, six systems: a global network infrastructure provider</h2>
+      <p class="sub">
+        Real projects rarely start from a blank slate — they layer AI onto whatever enterprise
+        systems already run the business. Take a large B2B hardware manufacturer that sells
+        networking and connectivity infrastructure to enterprises and telecom operators
+        worldwide: it already runs a fairly standard stack of six systems, and every one of them
+        is a candidate for an AI feature, for exactly the same reason as above — check the
+        request before you send it, not after.
+      </p>
+    </div>
+
+    <h2><span class="type-num">7</span>ERP &amp; supply chain — an AI copilot over SAP/PLM data</h2>
+    <div class="panel">
+      <p>Plant managers and planners need answers like "what's our raw-material shortage risk for
+      Q3 cable production?" — which means pulling live ERP/PLM tables (inventory, bills of
+      materials, supplier lead times) and handing them to a model as context. Those table dumps
+      are exactly the kind of request that quietly balloons in size as a plant adds SKUs or
+      suppliers.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>After the ERP query runs, assemble the data-plus-question prompt and check it with
+        <code>/analyze</code> before generation — a bad join or an unfiltered date range can
+        produce a huge table dump without anyone intending it to.</li>
+        <li>On <code>WARNING</code>/<code>EXCEEDED</code>, pre-aggregate the ERP result (fewer
+        rows, summarized columns) instead of sending the raw export.</li>
+        <li>Create one <a href="workspaces.html">Workspace</a> per manufacturing plant so each
+        plant's copilot usage is tracked separately from the start.</li>
+        <li>Run <code>/project</code> across all plants with expected query volume per plant to
+        forecast the rollout's total cost before turning it on globally.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li><code>context_utilization</code> per plant — a plant that's consistently near the
+        ceiling has a data-shaping problem, not a model-size problem.</li>
+        <li>Cost per plant via each workspace's consolidated report, and a ranked
+        <code>/workspaces/{id}/comparison</code> across all plants.</li>
+        <li><code>EXCEEDED</code> rate trend as plants add SKUs/suppliers over the year.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">8</span>CRM &amp; sales — AI account summaries at global scale</h2>
+    <div class="panel">
+      <p>Reps across every region get an AI-drafted account summary or next-best-action note
+      pulled from CRM opportunity and interaction history before a call. A distributor account
+      that's been active for a decade has a very different context size than one signed last
+      month — and this is customer-facing content, where a silently-wrong token estimate is
+      worse than an API call that simply costs more.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before drafting, run <code>/analyze</code> (or <code>/analyze/exact</code> for real
+        Claude/Gemini counts, since accuracy matters more than usual here) on the assembled
+        account-history prompt.</li>
+        <li>On <code>EXCEEDED</code>, summarize older interaction history instead of truncating
+        it silently — a rep should never get a summary built from an arbitrarily cut-off
+        history.</li>
+        <li>Label every real call by sales region and consolidate with <code>/report</code>
+        weekly.</li>
+        <li>Use <code>by_label</code> in the report to compare regions with very different
+        account-book sizes (a 20-year enterprise territory vs. a new reseller market).</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per rep and per region, via <code>by_label</code> — flags a region whose account
+        histories have grown unusually large.</li>
+        <li><code>confidence</code> on Exact-mode responses — a dip signals the provider call is
+        failing more often and falling back to the heuristic for that region.</li>
+        <li><code>EXCEEDED</code> count trend after the history-summarization step ships.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">9</span>B2B partner portal — an AI product &amp; ordering assistant</h2>
+    <div class="panel">
+      <p>Distributors ordering hardware through a self-service portal need help finding the right
+      SKU or spec out of a catalog with thousands of parts — a retrieval-style assistant over the
+      product catalog, not unlike the RAG scenario above, but with a partner tier and order
+      history layered on top.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>After catalog retrieval, run <code>/analyze</code> on the assembled query + top-k
+        spec-sheet chunks before generation, same as any RAG pipeline.</li>
+        <li>Use <code>context_utilization</code> to right-size how many spec sheets get pulled in
+        per query — catalog chunks are often far bigger than they need to be for a simple "which
+        connector fits X" question.</li>
+        <li>Create one <a href="workspaces.html">Workspace</a> per major distributor tier (or per
+        key account) and route each partner's assistant calls through that project's tool-run
+        endpoints, exactly as in the multi-tenant SaaS scenario above.</li>
+        <li>Give each key account's team a consolidated PDF report of their own assistant usage
+        via <code>.../report/consolidated.pdf</code> — a natural fit for a quarterly
+        partner-account review.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per partner tier, straight from each workspace's consolidated report.</li>
+        <li>The live distribution of <code>context_utilization</code> — how much catalog data
+        each query actually needed versus what was sent.</li>
+        <li><code>WARNING</code>/<code>EXCEEDED</code> share for partners with unusually broad
+        catalog access (a global distributor carrying the full SKU range vs. a regional reseller
+        with a narrow one).</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">10</span>Infrastructure &amp; data-center management — AI ops summaries</h2>
+    <div class="panel">
+      <p>A DCIM (data-center infrastructure management) platform tracks switch maps, rack
+      capacity, and power/cooling telemetry across every site. An AI layer that turns a night's
+      raw telemetry into a plain-language ops report for the morning stand-up is exactly the
+      batch-pipeline pattern above, applied per site, at real infrastructure scale — hundreds of
+      sites, each with its own telemetry volume.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before summarizing a site's telemetry, run <code>/analyze</code> per site to catch
+        the handful of unusually large sites (more racks, denser instrumentation) before they
+        blow the window.</li>
+        <li>Route oversized sites into a chunk-summarize-then-combine pattern rather than one call
+        per site — the same fix as the batch/ETL scenario above, just per-site instead of
+        per-document.</li>
+        <li>Tag each site's result with a <code>label</code> (site id/region) and a
+        <code>phase</code> ("nightly" vs. an on-demand incident run), then consolidate the whole
+        night's sweep with one <code>/report</code> call.</li>
+        <li>Watch <code>requests_per_second</code>/<code>duration_seconds</code> across the fleet
+        sweep as an early signal that a site's telemetry volume has grown — before it shows up as
+        a support ticket.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li><code>EXCEEDED</code> sites caught pre-flight, by <code>by_label</code> (site/region)
+        — tells you exactly which sites need the chunking path.</li>
+        <li><code>total_cost</code> per fleet sweep, night-over-night, to catch the sweep quietly
+        getting more expensive as the network grows.</li>
+        <li><code>requests_per_second</code> as a fleet health signal — a sudden drop often means
+        a subset of sites is timing out, not just running slow.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">11</span>BI &amp; analytics — an AI narrative layer over the dashboard</h2>
+    <div class="panel">
+      <p>Executive dashboards show factory output, revenue, and supply-chain risk — but a
+      dashboard alone doesn't answer "so what changed this week and why." An AI layer that turns
+      a BI query result into a short written narrative, delivered alongside the dashboard, is a
+      natural extension once the numbers already exist.</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Before generating the narrative, run <code>/analyze</code> on the assembled
+        dashboard-snapshot-plus-question prompt — a dashboard with many metrics/breakdowns can
+        produce a surprisingly large context.</li>
+        <li>Use <code>/analyze/exact</code> for the real provider token count on
+        executive-facing output, where predictable cost matters more than for an internal tool.</li>
+        <li>Run <code>/project</code> before increasing refresh frequency (weekly → daily) or
+        rolling the narrative out to more dashboards, to forecast the cost step-change ahead of
+        time.</li>
+        <li>Consolidate a month of narrative runs with <code>/report</code>, labeled by
+        dashboard/team, for a simple cost-per-dashboard view finance can read directly.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per report-run via <code>by_label</code> (per dashboard/team), and how it moves
+        as a dashboard grows more metrics.</li>
+        <li>Projected vs. actual cost when refresh frequency changes — <code>/project</code>'s
+        forecast against the following month's real <code>/report</code>.</li>
+        <li><code>EXCEEDED</code> rate as a leading indicator that a dashboard has outgrown a
+        single-call narrative and needs its own summarize-then-combine step.</li>
+      </ul>
+    </div>
+
+    <h2><span class="type-num">12</span>Enterprise collaboration — a company-wide AI assistant</h2>
+    <div class="panel">
+      <p>An AI assistant embedded in the collaboration suite answers employee questions by
+      pulling context from meeting transcripts, shared documents, and chat history — used by a
+      global workforce, at every scale from a quick one-line question to "summarize this
+      90-minute transcript."</p>
+      <h3>Integration steps</h3>
+      <ol>
+        <li>Run <code>/analyze</code> per query in real time — latency-sensitive, so this is a
+        pre-flight check on the critical path, not a batch job.</li>
+        <li>On <code>EXCEEDED</code> (a full transcript or long document dump), switch to a
+        chunk-summarize-then-combine path instead of failing the request outright.</li>
+        <li>Create one <a href="workspaces.html">Workspace</a> per business unit/department so
+        cost is visible per team from day one, not discovered later in one combined bill.</li>
+        <li>Treat prompt-template changes to the assistant like the CI/CD scenario above — this
+        is the one place a small template change reaches every employee in the company at once,
+        so gate it the same way.</li>
+      </ol>
+      <h3>What to measure</h3>
+      <ul>
+        <li>Cost per department/BU via <code>/workspaces/{id}/comparison</code> across the whole
+        company.</li>
+        <li><code>EXCEEDED</code> rate for long-document/transcript requests specifically, versus
+        quick questions — two very different usage patterns worth tracking separately.</li>
+        <li>Company-wide average cost per query over time — the number most likely to actually
+        end up in a budget conversation.</li>
       </ul>
     </div>
 
