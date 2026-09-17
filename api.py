@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, comparison, consolidated_report, db, notes, runtime_config, tool_runs, workspaces as ws
+from airi import author, comparison, consolidated_report, db, notes, runtime_config, tool_runs, vendor_pricing, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -464,6 +464,51 @@ def models():
         }
         for model_id, spec in sorted(MODEL_REGISTRY.items())
     ]
+
+
+def _vendor_tool_dict(tool: "vendor_pricing.VendorTool") -> dict:
+    return {
+        "id": tool.id,
+        "name": tool.name,
+        "vendor": tool.vendor,
+        "category": tool.category,
+        "billing_unit": tool.billing_unit,
+        "pricing_url": tool.pricing_url,
+        "note": tool.note,
+    }
+
+
+@app.get("/pricing/license-tools")
+def pricing_license_tools():
+    """Vendor list for the License Requests wizard's dropdown — utility/
+    SaaS AI seat licenses (Microsoft 365 Copilot, Cowork, ChatGPT
+    Enterprise, ...). No prices here; see GET /pricing/{tool_id}/live."""
+    return [_vendor_tool_dict(t) for t in vendor_pricing.list_license_tools()]
+
+
+@app.get("/pricing/sdlc-tools")
+def pricing_sdlc_tools():
+    """Vendor list for the SDLC Tools wizard's dropdown — developer-tool AI
+    seats and usage (GitHub Copilot, Microsoft Foundry, Cursor, ...)."""
+    return [_vendor_tool_dict(t) for t in vendor_pricing.list_sdlc_tools()]
+
+
+@app.get("/pricing/{tool_id}/live")
+def pricing_live(tool_id: str):
+    """Best-effort: fetches the vendor's own public pricing page right now
+    and tries to read a per-seat USD price off it. This is intentionally
+    not a cached static table (vendor pricing changes and varies by
+    tier/region/negotiated discount) — a miss here is expected for a good
+    chunk of vendors (JS-rendered pages, quote-only pricing) and is a
+    normal 404, not a server error; the frontend always falls back to
+    letting the person type in their own known price."""
+    tool = vendor_pricing.get_tool(tool_id)
+    if tool is None:
+        raise HTTPException(status_code=404, detail="Unknown tool.")
+    try:
+        return vendor_pricing.fetch_live_price(tool_id)
+    except vendor_pricing.PricingFetchError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 def _analyze_input_for_storage(body: "AnalyzeRequest") -> Dict[str, Any]:

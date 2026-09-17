@@ -133,8 +133,9 @@
   .finish-panel { text-align: center; }
   .finish-panel a.btn {
     display: inline-block; background: var(--accent); color: #0f1115; text-decoration: none;
-    border-radius: 8px; padding: 12px 20px; font-size: 15px; font-weight: 700; margin-top: 14px;
+    border-radius: 8px; padding: 12px 20px; font-size: 15px; font-weight: 700; margin: 14px 6px 0;
   }
+  .finish-panel a.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
 
   .site-footer {
     margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
@@ -192,6 +193,35 @@
 <script>
   const API_BASE = "https://airi-mvp-api.onrender.com";
   const RUN_NAME = "BrightCart demo — TicketBot support traffic";
+  const COMBINED_KEY = "airi_demo_combined_costs"; // shared with license-wizard.html + sdlc-wizard.html
+
+  function readCombined() {
+    try { return JSON.parse(localStorage.getItem(COMBINED_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function writeCombinedEntry(key, monthly, label) {
+    const all = readCombined();
+    all[key] = { monthly, label, ts: Date.now() };
+    try { localStorage.setItem(COMBINED_KEY, JSON.stringify(all)); } catch (e) {}
+  }
+  function combinedTotalHtml() {
+    const all = readCombined();
+    const order = [["api", "API traffic"], ["license", "License seats"], ["sdlc", "SDLC tools"]];
+    const rows = order.filter(([k]) => all[k]);
+    if (!rows.length) return "";
+    const total = rows.reduce((s, [k]) => s + (all[k].monthly || 0), 0);
+    return `
+      <table class="mini-table">
+        <tr><th>Request type</th><th>Monthly cost</th></tr>
+        ${rows.map(([k, label]) => `<tr><td>${esc(label)}</td><td>${money(all[k].monthly)}</td></tr>`).join("")}
+      </table>
+      <div class="result-grid" style="margin-top:12px;">
+        <div class="stat"><div class="label">Combined so far</div><div class="value">${money(total)}/mo</div></div>
+        <div class="stat"><div class="label">Request types run</div><div class="value">${rows.length} of 3</div></div>
+      </div>
+      <div class="demo-note">Reads whatever this browser has already run across the API, License, and SDLC wizards (stored locally, not on a server) — run all three for the full picture.</div>
+    `;
+  }
 
   const ORDER_PROMPT = "Hi, my order #4821 hasn't arrived yet — can you check the status?";
   const ESCALATION_PROMPT = "Customer says order #4821 hasn't arrived in 9 days, wants a refund or replacement. Summarize this thread for a human agent.";
@@ -202,7 +232,7 @@
     { label: "escalation-summary", prompt: ESCALATION_PROMPT, model: "claude-3-5-sonnet", expected_output_tokens: 80, normal: 2, peak: 1 },
   ];
 
-  const state = { step1: null, escalation: null, reportRecords: null };
+  const state = { step1: null, escalation: null, reportRecords: null, projectionMonthly: null };
 
   function esc(str) {
     const d = document.createElement("div");
@@ -339,6 +369,7 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error((data && data.detail) || "Request failed.");
+        state.projectionMonthly = data.total_cost;
         return data;
       },
       renderResult: (r) => `
@@ -584,9 +615,16 @@
       },
       renderResult: (blob) => {
         const blobUrl = URL.createObjectURL(blob);
+        if (state.projectionMonthly != null) {
+          writeCombinedEntry("api", state.projectionMonthly, "TicketBot traffic projection");
+        }
         return `
           <a class="file-link" href="${blobUrl}" download="airi-binary.zip">Download airi-binary.zip →</a>
           <p style="margin-top:14px;font-size:13px;color:var(--muted);">That's every AIRI feature — check a request, project traffic, consolidate a report in three formats, sign in, organize work into workspaces, and take the library with you.</p>
+          ${state.projectionMonthly != null ? `
+            <div class="demo-note">API traffic isn't the only AI request AIRI can cost out — a company also gets per-seat license requests (Microsoft 365 Copilot, Cowork...) and SDLC tool requests (GitHub Copilot, Microsoft Foundry...). This run's projected monthly cost now counts toward a combined total across all three:</div>
+            ${combinedTotalHtml()}
+          ` : ""}
         `;
       },
       isFinal: true,
@@ -677,6 +715,8 @@
       stepPanel.insertAdjacentHTML("beforeend", `
         <div class="finish-panel" style="margin-top:20px;">
           <a class="btn" href="app.html">Open AIRI now →</a>
+          <a class="btn secondary" href="license-wizard.html">License request demo →</a>
+          <a class="btn secondary" href="sdlc-wizard.html">SDLC tool demo →</a>
         </div>
       `);
     }

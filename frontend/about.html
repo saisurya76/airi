@@ -240,6 +240,26 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
       <a href="scenarios.html">Usage scenarios page</a>.</p>
     </div>
 
+    <h2><span class="step-num">7</span>Beyond API traffic: license & SDLC tool requests</h2>
+    <div class="panel">
+      <p>An "AI request" inside a company isn't only API calls a developer wires up — it's also the
+      per-seat <b>license</b> a department asks for (Microsoft 365 Copilot, Cowork, ChatGPT
+      Enterprise...) and the <b>SDLC tool</b> a dev team asks for (GitHub Copilot, Microsoft
+      Foundry, Cursor...). AIRI covers both the same way it covers API traffic: pick a real vendor
+      from a list of major tools in that category, AIRI tries to fetch its current public price
+      live off the vendor's own pricing page (not a stored number — some vendors don't publish a
+      plain price at all, in which case you enter your own), say how many seats you need, and get
+      a monthly/annual total.</p>
+      <ol>
+        <li>Two separate walkthroughs, kept apart from the API demo since the request shape is
+        different: <a href="license-wizard.html">License request wizard</a> and
+        <a href="sdlc-wizard.html">SDLC tool request wizard</a>.</li>
+        <li>Run any of the three demos (API, License, SDLC) and each one's result rolls into a
+        combined monthly total shown at the end — a management-level view across every kind of AI
+        spend, not just API bills.</li>
+      </ol>
+    </div>
+
     <p class="note" style="margin-top:28px;">
       This page covers every scenario AIRI supports today. It gets updated whenever a new one
       ships, so it's always a complete picture of what you can do here — not a snapshot of

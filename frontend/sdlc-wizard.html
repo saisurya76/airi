@@ -1,0 +1,449 @@
+<!--
+  Demo wizard for AIRI's third "AI request" type: an SDLC/dev-tool
+  request — an engineering team wanting an AI coding assistant seat
+  (GitHub Copilot, Cursor, ...) or usage-based API access (Microsoft
+  Foundry). Same pattern as license-wizard.html, separate vendor list,
+  shares the same localStorage combined-total key so a visitor who runs
+  all three wizards sees one grand total across API + License + SDLC.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIRI — SDLC tool request wizard</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262a33;
+    --text: #e8e9ec;
+    --muted: #9aa0ac;
+    --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  .top-bar a:hover { text-decoration: underline; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+
+  .wizard-head { margin-bottom: 18px; }
+  .progress-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .progress-track { height: 6px; border-radius: 3px; background: #1f232c; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.25s ease; }
+  .step-dots { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .step-dot {
+    width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .step-dot:hover { border-color: var(--accent); color: var(--text); }
+  .step-dot.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  .step-dot.done { background: rgba(62,207,142,0.15); color: var(--safe); border-color: rgba(62,207,142,0.4); }
+
+  .kind-badge {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
+    padding: 3px 10px; margin-bottom: 10px;
+  }
+  .kind-badge.live { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .kind-badge.demo { background: rgba(242,184,75,0.15); color: var(--warning); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .step-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
+  .step-blurb { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 14px 0 5px; font-weight: 600; }
+  label:first-of-type { margin-top: 0; }
+  select, input[type="number"], input[type="text"] {
+    width: 100%; background: #0f1115; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 10px 12px; font-size: 14px; font-family: inherit;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+  .field-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .field-note a { color: var(--accent); }
+
+  button {
+    background: var(--accent); color: #0f1115; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .secondary-btn { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  .run-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .error { color: var(--exceeded); font-size: 13px; margin-top: 10px; }
+
+  .result-box { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .result-box:empty { display: none; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .stat .value { font-size: 16px; font-weight: 600; }
+  .demo-note {
+    color: var(--muted); font-size: 12px; margin-top: 12px; background: rgba(242,184,75,0.08);
+    border: 1px solid rgba(242,184,75,0.3); border-radius: 8px; padding: 8px 10px;
+  }
+  .live-note {
+    color: var(--muted); font-size: 12px; margin-top: 12px; background: rgba(62,207,142,0.08);
+    border: 1px solid rgba(62,207,142,0.3); border-radius: 8px; padding: 8px 10px;
+  }
+  table.mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  table.mini-table th, table.mini-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.mini-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+
+  .nav-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+  .nav-row .spacer { flex: 1; }
+
+  .finish-panel { text-align: center; }
+  .finish-panel a.btn {
+    display: inline-block; background: var(--accent); color: #0f1115; text-decoration: none;
+    border-radius: 8px; padding: 12px 20px; font-size: 15px; font-weight: 700; margin: 6px;
+  }
+  .finish-panel a.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+
+  .site-footer {
+    margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    text-align: center; color: var(--muted); font-size: 12px;
+  }
+  .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
+  .site-footer a:hover { color: var(--accent); }
+  @media (max-width: 480px) {
+    .result-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <a href="index.html">← Back to AIRI</a>
+      <span>
+        <a href="wizard.html">API demo</a> ·
+        <a href="license-wizard.html">← License demo</a>
+      </span>
+    </div>
+
+    <h1>SDLC tool request wizard</h1>
+    <p class="sub">
+      BrightCart's engineering team wants an AI coding assistant — a developer-tool request, the
+      third AI request shape AIRI covers alongside API traffic and per-seat utility licenses. Pick
+      a real vendor, AIRI tries to fetch its <em>current</em> public price live, and you say how
+      many developer seats (or expected usage spend) you need.
+    </p>
+
+    <div class="wizard-head">
+      <div class="progress-row">
+        <span id="stepLabel">Step 1 of 5</span>
+        <span id="totalTop"></span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:20%;"></div></div>
+      <div class="step-dots" id="stepDots"></div>
+    </div>
+
+    <div class="panel" id="stepPanel"></div>
+
+    <div class="nav-row">
+      <button type="button" id="prevBtn" class="secondary-btn">← Prev</button>
+      <div class="spacer"></div>
+      <button type="button" id="nextBtn">Next →</button>
+    </div>
+
+    <div class="site-footer">
+      <a href="index.html">AIRI home</a>
+      <a href="about.html">What's AIRI?</a>
+      <a href="scenarios.html">Usage scenarios</a>
+      <a href="developers.html">For developers</a>
+    </div>
+  </div>
+
+<script>
+  const API_BASE = "https://airi-mvp-api.onrender.com";
+  const COMBINED_KEY = "airi_demo_combined_costs"; // shared with wizard.html + license-wizard.html
+
+  function esc(str) {
+    const d = document.createElement("div");
+    d.textContent = str == null ? "" : String(str);
+    return d.innerHTML;
+  }
+  function money(n) {
+    if (n == null || isNaN(n)) return "—";
+    return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  function readCombined() {
+    try { return JSON.parse(localStorage.getItem(COMBINED_KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function writeCombinedEntry(key, monthly, label) {
+    const all = readCombined();
+    all[key] = { monthly, label, ts: Date.now() };
+    try { localStorage.setItem(COMBINED_KEY, JSON.stringify(all)); } catch (e) {}
+  }
+  function combinedTotalHtml() {
+    const all = readCombined();
+    const order = [["api", "API traffic"], ["license", "License seats"], ["sdlc", "SDLC tools"]];
+    const rows = order.filter(([k]) => all[k]);
+    if (!rows.length) return "";
+    const total = rows.reduce((s, [k]) => s + (all[k].monthly || 0), 0);
+    return `
+      <table class="mini-table">
+        <tr><th>Request type</th><th>Monthly cost</th></tr>
+        ${rows.map(([k, label]) => `<tr><td>${esc(label)}</td><td>${money(all[k].monthly)}</td></tr>`).join("")}
+      </table>
+      <div class="result-grid" style="margin-top:12px;">
+        <div class="stat"><div class="label">Combined so far</div><div class="value">${money(total)}/mo</div></div>
+        <div class="stat"><div class="label">Request types run</div><div class="value">${rows.length} of 3</div></div>
+      </div>
+      <div class="demo-note">Reads whatever this browser has already run across the API, License, and SDLC wizards (stored locally, not on a server) — run all three for the full picture.</div>
+    `;
+  }
+
+  const state = { tools: [], selectedId: null, priceSource: null, priceValue: null, seats: 18 };
+
+  function selectedTool() { return state.tools.find(t => t.id === state.selectedId); }
+  function isUsageBased(tool) { return !!tool && /usage-based/i.test(tool.billing_unit); }
+
+  async function loadTools() {
+    const res = await fetch(`${API_BASE}/pricing/sdlc-tools`);
+    if (!res.ok) throw new Error("Couldn't load the vendor list.");
+    state.tools = await res.json();
+    return state.tools;
+  }
+
+  async function fetchLivePrice(toolId) {
+    const res = await fetch(`${API_BASE}/pricing/${toolId}/live`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Couldn't fetch a live price.");
+    return data;
+  }
+
+  // ---------------------------------------------------------------------
+  const STEPS = [
+    {
+      title: "Pick the tool BrightCart's engineers want",
+      kind: "live",
+      blurb: "Same shape as any dev-tool AI request that lands on an engineering lead's desk: which assistant, which tier.",
+      render: () => `
+        <label for="toolSelect">Tool</label>
+        <select id="toolSelect"></select>
+        <div class="field-note" id="toolNote"></div>
+      `,
+      attach: async () => {
+        const sel = document.getElementById("toolSelect");
+        const note = document.getElementById("toolNote");
+        sel.innerHTML = `<option>Loading vendors…</option>`;
+        try {
+          const tools = await loadTools();
+          sel.innerHTML = tools.map(t => `<option value="${esc(t.id)}">${esc(t.name)} — ${esc(t.vendor)}</option>`).join("");
+          if (state.selectedId) sel.value = state.selectedId;
+          else state.selectedId = sel.value;
+          const updateNote = () => {
+            const t = selectedTool();
+            note.textContent = t ? `${t.billing_unit} · public pricing: ${t.pricing_url}${t.note ? " — " + t.note : ""}` : "";
+          };
+          updateNote();
+          sel.addEventListener("change", () => { state.selectedId = sel.value; state.priceValue = null; updateNote(); });
+        } catch (e) {
+          sel.innerHTML = `<option>Couldn't load vendors</option>`;
+          note.textContent = e.message;
+        }
+      },
+      canAdvance: () => !!state.selectedId,
+    },
+    {
+      title: "Fetch its current price",
+      kind: "live",
+      blurb: "AIRI fetches the vendor's own public pricing page right now and looks for a per-seat price — a genuine live attempt, not a stored number. Usage-based tools (like Microsoft Foundry) don't publish a flat seat price at all, so this step will typically ask you to enter an expected spend instead.",
+      render: () => {
+        const t = selectedTool();
+        const usage = isUsageBased(t);
+        return `
+          <button type="button" id="fetchPriceBtn" ${usage ? "disabled" : ""}>${usage ? "No per-seat price to fetch (usage-based)" : "Fetch live price"}</button>
+          <div id="fetchStatus" class="run-note"></div>
+          <div id="fetchResult"></div>
+          <label for="manualPrice" style="margin-top:16px;">${usage ? "Expected monthly spend (USD)" : "Price per seat / month (USD)"} — edit or enter manually</label>
+          <input type="number" id="manualPrice" min="0" step="0.01" placeholder="${usage ? "e.g. 400.00" : "e.g. 19.00"}" value="${state.priceValue != null ? state.priceValue : ""}" />
+        `;
+      },
+      attach: () => {
+        const btn = document.getElementById("fetchPriceBtn");
+        const status = document.getElementById("fetchStatus");
+        const result = document.getElementById("fetchResult");
+        const manual = document.getElementById("manualPrice");
+        manual.addEventListener("input", () => { state.priceValue = manual.value ? parseFloat(manual.value) : null; state.priceSource = state.priceSource || "manual"; });
+        if (btn.disabled) return;
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          status.textContent = "Fetching the vendor's pricing page…";
+          result.innerHTML = "";
+          try {
+            const data = await fetchLivePrice(state.selectedId);
+            status.textContent = "";
+            state.priceValue = data.price_per_seat;
+            state.priceSource = "live";
+            manual.value = data.price_per_seat;
+            result.innerHTML = `<div class="live-note">✓ Fetched $${data.price_per_seat}/seat/month just now from <a href="${esc(data.source_url)}" target="_blank" rel="noopener">${esc(data.source_url)}</a>${data.cached ? " (cached from a recent fetch)" : ""}. Verify this matches your actual contract before treating it as final.</div>`;
+          } catch (e) {
+            status.textContent = "";
+            result.innerHTML = `<div class="error">${esc(e.message)} — enter the price yourself below instead.</div>`;
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      },
+      canAdvance: () => state.priceValue != null && state.priceValue >= 0,
+    },
+    {
+      title: "How many developer seats?",
+      kind: "demo",
+      blurb: "For a usage-based tool this step is skipped in the math — your expected spend from the previous step already is the monthly total.",
+      render: () => {
+        const t = selectedTool();
+        if (isUsageBased(t)) {
+          return `<div class="demo-note">${esc(t.name)} bills by usage, not by seat — nothing to enter here. Your expected monthly spend from the previous step carries straight through to the total.</div>`;
+        }
+        return `
+          <label for="seatsInput">Number of developer seats</label>
+          <input type="number" id="seatsInput" min="1" step="1" value="${state.seats}" />
+          <div class="field-note">BrightCart's engineering team, for this walkthrough.</div>
+        `;
+      },
+      attach: () => {
+        const input = document.getElementById("seatsInput");
+        if (input) input.addEventListener("input", () => { state.seats = parseInt(input.value, 10) || 0; });
+      },
+      canAdvance: () => { const t = selectedTool(); return isUsageBased(t) || state.seats > 0; },
+    },
+    {
+      title: "Total SDLC tool cost",
+      kind: "demo",
+      blurb: "Seats × price per seat — or, for a usage-based tool, your entered expected spend directly.",
+      render: () => {
+        const t = selectedTool();
+        const usage = isUsageBased(t);
+        const seats = usage ? 1 : state.seats;
+        const monthly = usage ? state.priceValue : state.priceValue * state.seats;
+        return `
+          <table class="mini-table">
+            <tr><th>Tool</th><th>${usage ? "Billing" : "Seats"}</th><th>${usage ? "" : "Price/seat/mo"}</th><th>Monthly total</th></tr>
+            <tr>
+              <td>${esc(t ? t.name : state.selectedId)}</td>
+              <td>${usage ? "Usage-based" : state.seats}</td>
+              <td>${usage ? "—" : money(state.priceValue)}</td>
+              <td>${money(monthly)}</td>
+            </tr>
+          </table>
+          <div class="result-grid" style="margin-top:12px;">
+            <div class="stat"><div class="label">Monthly</div><div class="value">${money(monthly)}</div></div>
+            <div class="stat"><div class="label">Annual</div><div class="value">${money(monthly * 12)}</div></div>
+          </div>
+          <div class="demo-note">Price source: ${state.priceSource === "live" ? "fetched live from the vendor's pricing page" : "entered manually"}.</div>
+        `;
+      },
+      attach: () => {},
+      canAdvance: () => true,
+    },
+    {
+      title: "Done — this counts toward your combined AI request cost",
+      kind: "demo",
+      isFinal: true,
+      blurb: "AIRI treats an SDLC tool request as one of three AI request shapes — alongside API traffic and per-seat utility licenses — so a management team can see the whole AI spend picture in one place.",
+      render: () => {
+        const t = selectedTool();
+        const usage = isUsageBased(t);
+        const monthly = usage ? state.priceValue : state.priceValue * state.seats;
+        writeCombinedEntry("sdlc", monthly, `${t ? t.name : state.selectedId}${usage ? "" : " × " + state.seats + " seats"}`);
+        return `
+          <div class="result-grid">
+            <div class="stat"><div class="label">This request's monthly cost</div><div class="value">${money(monthly)}</div></div>
+            <div class="stat"><div class="label">${usage ? "Billing" : "Seats"}</div><div class="value">${usage ? "Usage-based" : state.seats}</div></div>
+          </div>
+          ${combinedTotalHtml()}
+        `;
+      },
+      attach: () => {},
+      canAdvance: () => true,
+    },
+  ];
+
+  let current = 0;
+  const done = new Set();
+
+  const stepPanel = document.getElementById("stepPanel");
+  const stepLabel = document.getElementById("stepLabel");
+  const progressFill = document.getElementById("progressFill");
+  const stepDots = document.getElementById("stepDots");
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+
+  function buildDots() {
+    stepDots.innerHTML = STEPS.map((_, i) => `<div class="step-dot" data-i="${i}">${i + 1}</div>`).join("");
+    stepDots.querySelectorAll(".step-dot").forEach((dot) => {
+      dot.addEventListener("click", () => { current = parseInt(dot.dataset.i, 10); renderStep(); });
+    });
+  }
+
+  function updateChrome() {
+    stepLabel.textContent = `Step ${current + 1} of ${STEPS.length}`;
+    progressFill.style.width = `${((current + 1) / STEPS.length) * 100}%`;
+    stepDots.querySelectorAll(".step-dot").forEach((dot, i) => {
+      dot.classList.toggle("active", i === current);
+      dot.classList.toggle("done", done.has(i) && i !== current);
+    });
+    prevBtn.disabled = current === 0;
+    const s = STEPS[current];
+    nextBtn.textContent = current === STEPS.length - 1 ? "Restart →" : "Next →";
+    nextBtn.disabled = !s.canAdvance();
+  }
+
+  async function renderStep() {
+    const s = STEPS[current];
+    stepPanel.innerHTML = `
+      <span class="kind-badge ${s.kind}">${s.kind === "live" ? "Live" : "Demo"}</span>
+      <h2 class="step-title">${esc(s.title)}</h2>
+      <p class="step-blurb">${s.blurb}</p>
+      <div id="stepBody">${s.render()}</div>
+    `;
+    await s.attach();
+    if (s.isFinal) {
+      stepPanel.insertAdjacentHTML("beforeend", `
+        <div class="finish-panel" style="margin-top:20px;">
+          <a class="btn" href="license-wizard.html">Try the License wizard →</a>
+          <a class="btn secondary" href="app.html">Open AIRI →</a>
+        </div>
+      `);
+    }
+    done.add(current);
+    updateChrome();
+    stepPanel.addEventListener("input", () => { nextBtn.disabled = !s.canAdvance(); });
+    stepPanel.addEventListener("click", () => { nextBtn.disabled = !s.canAdvance(); });
+    window.scrollTo({ top: stepPanel.offsetTop - 20, behavior: "smooth" });
+  }
+
+  prevBtn.addEventListener("click", () => { if (current > 0) { current--; renderStep(); } });
+  nextBtn.addEventListener("click", () => {
+    if (current < STEPS.length - 1) { current++; renderStep(); }
+    else { current = 0; renderStep(); }
+  });
+
+  buildDots();
+  renderStep();
+</script>
+</body>
+</html>
