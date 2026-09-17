@@ -79,10 +79,7 @@
       Before you send a prompt to a model, AIRI estimates <b>how many tokens</b> it'll use,
       <b>how much context window</b> that eats into, and roughly <b>what it'll cost</b> — so your
       app can decide to send, modify, or reject the request, instead of finding out after the
-      fact. And "AI request" isn't just API traffic: AIRI also costs out the <b>per-seat license</b>
-      requests (Microsoft 365 Copilot, Cowork, ChatGPT Enterprise...) and <b>SDLC tool</b> requests
-      (GitHub Copilot, Microsoft Foundry, Cursor...) a company's departments send up the chain —
-      so management can see the whole AI spend picture, not just API bills.
+      fact.<span id="goalExtra"></span>
     </p>
 
     <div class="cta-row">
@@ -105,22 +102,24 @@
       </div>
     </div>
 
-    <p class="tagline" style="margin-top:0;">Three kinds of AI requests, one picture</p>
-    <div class="capability-row">
-      <div class="capability">
-        <p class="cap-title">API traffic</p>
-        <p class="cap-desc">Prompts your app sends to a model — the walkthrough above.</p>
-        <p style="margin:10px 0 0;"><a href="wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
-      </div>
-      <div class="capability" id="licenseWizardCard">
-        <p class="cap-title">License requests</p>
-        <p class="cap-desc">Per-seat AI tool licenses — M365 Copilot, Cowork, ChatGPT Enterprise.</p>
-        <p style="margin:10px 0 0;"><a href="license-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
-      </div>
-      <div class="capability" id="sdlcWizardCard">
-        <p class="cap-title">SDLC tool requests</p>
-        <p class="cap-desc">Dev-tool AI seats and usage — GitHub Copilot, Microsoft Foundry, Cursor.</p>
-        <p style="margin:10px 0 0;"><a href="sdlc-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
+    <div id="kindsSection">
+      <p class="tagline" id="kindsTagline" style="margin-top:0;">Three kinds of AI requests, one picture</p>
+      <div class="capability-row">
+        <div class="capability">
+          <p class="cap-title">API traffic</p>
+          <p class="cap-desc">Prompts your app sends to a model — the walkthrough above.</p>
+          <p style="margin:10px 0 0;"><a href="wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
+        </div>
+        <div class="capability" id="licenseWizardCard">
+          <p class="cap-title">License requests</p>
+          <p class="cap-desc">Per-seat AI tool licenses — M365 Copilot, Cowork, ChatGPT Enterprise.</p>
+          <p style="margin:10px 0 0;"><a href="license-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
+        </div>
+        <div class="capability" id="sdlcWizardCard">
+          <p class="cap-title">SDLC tool requests</p>
+          <p class="cap-desc">Dev-tool AI seats and usage — GitHub Copilot, Microsoft Foundry, Cursor.</p>
+          <p style="margin:10px 0 0;"><a href="sdlc-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
+        </div>
       </div>
     </div>
 
@@ -135,21 +134,54 @@
 
 <script>
   // Admin-settable site visibility (see admin.html "Site visibility") —
-  // hides the two newer wizard cards if their flag is off. Fails open
-  // (stays visible) on a /config hiccup — same reasoning used everywhere
-  // else this flag is checked.
+  // hides the two newer wizard cards if their flag is off, AND rewrites
+  // the intro copy (the .goal paragraph's second sentence, plus the
+  // "N kinds of AI requests" heading/section) so the homepage never
+  // describes a request type that's currently hidden. Fails open (both
+  // wizards described/shown) on a /config hiccup — same reasoning used
+  // everywhere else this flag is checked.
+  const GOAL_EXTRA = {
+    both: ` And "AI request" isn't just API traffic: AIRI also costs out the <b>per-seat license</b>
+      requests (Microsoft 365 Copilot, Cowork, ChatGPT Enterprise...) and <b>SDLC tool</b> requests
+      (GitHub Copilot, Microsoft Foundry, Cursor...) a company's departments send up the chain —
+      so management can see the whole AI spend picture, not just API bills.`,
+    licenseOnly: ` And "AI request" isn't just API traffic: AIRI also costs out the <b>per-seat
+      license</b> requests (Microsoft 365 Copilot, Cowork, ChatGPT Enterprise...) a company's
+      departments send up the chain — so management can see the whole AI spend picture, not just
+      API bills.`,
+    sdlcOnly: ` And "AI request" isn't just API traffic: AIRI also costs out the <b>SDLC tool</b>
+      requests (GitHub Copilot, Microsoft Foundry, Cursor...) a company's departments send up the
+      chain — so management can see the whole AI spend picture, not just API bills.`,
+    neither: "",
+  };
+
   (async function applyVisibility() {
+    let showLicense = true;
+    let showSdlc = true;
     try {
       const res = await fetch("https://airi-mvp-api.onrender.com/config");
       const data = await res.json();
-      if (data.show_license_wizard === false) {
-        document.getElementById("licenseWizardCard").classList.add("hidden");
-      }
-      if (data.show_sdlc_wizard === false) {
-        document.getElementById("sdlcWizardCard").classList.add("hidden");
-      }
+      showLicense = data.show_license_wizard !== false;
+      showSdlc = data.show_sdlc_wizard !== false;
     } catch (e) {
-      // Fail open — leave both cards visible.
+      // Fail open — leave both wizards described/shown.
+    }
+
+    if (!showLicense) document.getElementById("licenseWizardCard").classList.add("hidden");
+    if (!showSdlc) document.getElementById("sdlcWizardCard").classList.add("hidden");
+
+    const goalExtra = document.getElementById("goalExtra");
+    if (showLicense && showSdlc) goalExtra.innerHTML = GOAL_EXTRA.both;
+    else if (showLicense) goalExtra.innerHTML = GOAL_EXTRA.licenseOnly;
+    else if (showSdlc) goalExtra.innerHTML = GOAL_EXTRA.sdlcOnly;
+    else goalExtra.innerHTML = GOAL_EXTRA.neither;
+
+    const visibleKinds = 1 + (showLicense ? 1 : 0) + (showSdlc ? 1 : 0); // API traffic is always on
+    if (visibleKinds <= 1) {
+      document.getElementById("kindsSection").classList.add("hidden");
+    } else {
+      document.getElementById("kindsTagline").textContent =
+        visibleKinds === 3 ? "Three kinds of AI requests, one picture" : "Two kinds of AI requests, one picture";
     }
   })();
 </script>
