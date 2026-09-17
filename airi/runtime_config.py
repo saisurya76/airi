@@ -65,3 +65,47 @@ def set_test_mode(value: bool) -> None:
     yet; re-running with the env var's own value has the same effect for
     the toggle, just leaves a DB row behind)."""
     db.set_config(TEST_MODE_KEY, "true" if value else "false")
+
+
+# --- Site visibility toggles ---
+#
+# Simple show/hide switches for a few discoverable-but-optional bits of
+# the site — the Author page link, and the two newer demo wizards
+# (license-wizard.html, sdlc-wizard.html). Unlike test_mode there's no
+# env-var layer here: just an app_config override (admin-settable via
+# POST /admin/visibility) with everything visible by default, since a
+# fresh deployment should show everything until an admin deliberately
+# hides something.
+#
+# Hiding a flag only removes it from navigation on every page that links
+# to it (see frontend/admin.html + each page's small "apply visibility"
+# script) — the two wizard pages additionally self-check their own flag
+# and show a plain "currently unavailable" notice instead of the wizard
+# if reached directly by URL while hidden. This is a soft, reversible
+# toggle for a demo feature, not an auth boundary — there's no server-
+# side enforcement on the /pricing/* endpoints themselves.
+
+VISIBILITY_KEYS = ("show_author_link", "show_license_wizard", "show_sdlc_wizard")
+DEFAULT_VISIBILITY = True  # nothing hidden until an admin turns it off
+
+
+def get_visibility(key: str) -> bool:
+    if key not in VISIBILITY_KEYS:
+        raise ValueError(f"Unknown visibility key: {key}")
+    try:
+        stored = db.get_config(key)
+    except db.DatabaseNotConfigured:
+        stored = None
+    if stored is None:
+        return DEFAULT_VISIBILITY
+    return stored.strip().lower() in ("1", "true", "yes", "on")
+
+
+def set_visibility(key: str, value: bool) -> None:
+    if key not in VISIBILITY_KEYS:
+        raise ValueError(f"Unknown visibility key: {key}")
+    db.set_config(key, "true" if value else "false")
+
+
+def get_all_visibility() -> dict:
+    return {key: get_visibility(key) for key in VISIBILITY_KEYS}

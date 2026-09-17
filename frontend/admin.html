@@ -222,6 +222,47 @@
       </ul>
     </div>
 
+    <div id="visibilityPanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">Site visibility</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">Hide a link across the whole site without a redeploy. Hiding a wizard also blocks the wizard page itself if someone reaches it directly by URL — this isn't an access-control boundary, just a soft "not ready to show yet" switch.</p>
+
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">Author button</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">The "Author" link in the app's nav (app.html, workspaces.html).</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="showAuthorToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">License request wizard</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">license-wizard.html and every link to it.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="showLicenseToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">SDLC tool request wizard</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">sdlc-wizard.html and every link to it.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="showSdlcToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div id="visibilityError" class="error hidden"></div>
+      <div id="visibilitySavedMsg" class="saved-msg hidden">Saved.</div>
+    </div>
+
     <div id="authorPanel" class="panel hidden">
       <div style="font-size:14px; color:var(--text); font-weight:600;">Author profile</div>
       <p class="sub" style="margin:4px 0 0; font-size:12px;">Shown publicly on the "Author" page — leave a field blank to hide it there.</p>
@@ -307,11 +348,19 @@
   const toggleSavedMsg = document.getElementById("toggleSavedMsg");
 
   const authorPanel = document.getElementById("authorPanel");
+  const visibilityPanel = document.getElementById("visibilityPanel");
+  const showAuthorToggle = document.getElementById("showAuthorToggle");
+  const showLicenseToggle = document.getElementById("showLicenseToggle");
+  const showSdlcToggle = document.getElementById("showSdlcToggle");
+  const visibilityError = document.getElementById("visibilityError");
+  const visibilitySavedMsg = document.getElementById("visibilitySavedMsg");
+  let lastSavedVisibility = { show_author_link: true, show_license_wizard: true, show_sdlc_wizard: true };
 
   function showSignedOut() {
     loginPanel.classList.remove("hidden");
     dashboardPanel.classList.add("hidden");
     checklistPanel.classList.add("hidden");
+    visibilityPanel.classList.add("hidden");
     authorPanel.classList.add("hidden");
     signOutBtn.classList.add("hidden");
   }
@@ -320,6 +369,7 @@
     loginPanel.classList.add("hidden");
     dashboardPanel.classList.remove("hidden");
     checklistPanel.classList.remove("hidden");
+    visibilityPanel.classList.remove("hidden");
     authorPanel.classList.remove("hidden");
     signOutBtn.classList.remove("hidden");
   }
@@ -357,6 +407,15 @@
       document.getElementById("dotGoogle").className = "dot " + (c.google_key ? "on" : "off");
       document.getElementById("dotResend").className = "dot " + (c.resend ? "on" : "off");
       document.getElementById("dotDatabase").className = "dot " + (c.database ? "on" : "off");
+      const v = data.visibility || {};
+      lastSavedVisibility = {
+        show_author_link: v.show_author_link !== false,
+        show_license_wizard: v.show_license_wizard !== false,
+        show_sdlc_wizard: v.show_sdlc_wizard !== false,
+      };
+      showAuthorToggle.checked = lastSavedVisibility.show_author_link;
+      showLicenseToggle.checked = lastSavedVisibility.show_license_wizard;
+      showSdlcToggle.checked = lastSavedVisibility.show_sdlc_wizard;
       showSignedIn();
     } catch (e) {
       toggleError.textContent = e.message;
@@ -595,10 +654,59 @@
     }
   }
 
+  async function onVisibilityToggleChanged() {
+    visibilityError.classList.add("hidden");
+    visibilitySavedMsg.classList.add("hidden");
+    // The 3 switches share one full-replace endpoint, so every change
+    // sends all 3 current (post-click) states. On failure, revert all 3
+    // to the last state we know actually saved — simpler and safer than
+    // trying to undo just the one that changed.
+    const attempted = {
+      show_author_link: showAuthorToggle.checked,
+      show_license_wizard: showLicenseToggle.checked,
+      show_sdlc_wizard: showSdlcToggle.checked,
+    };
+    [showAuthorToggle, showLicenseToggle, showSdlcToggle].forEach((el) => { el.disabled = true; });
+    try {
+      const res = await fetch(`${API_BASE}/admin/visibility`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(attempted),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || "Could not update visibility.");
+      lastSavedVisibility = {
+        show_author_link: data.show_author_link,
+        show_license_wizard: data.show_license_wizard,
+        show_sdlc_wizard: data.show_sdlc_wizard,
+      };
+      showAuthorToggle.checked = lastSavedVisibility.show_author_link;
+      showLicenseToggle.checked = lastSavedVisibility.show_license_wizard;
+      showSdlcToggle.checked = lastSavedVisibility.show_sdlc_wizard;
+      visibilitySavedMsg.classList.remove("hidden");
+      setTimeout(() => visibilitySavedMsg.classList.add("hidden"), 2500);
+    } catch (e) {
+      showAuthorToggle.checked = lastSavedVisibility.show_author_link;
+      showLicenseToggle.checked = lastSavedVisibility.show_license_wizard;
+      showSdlcToggle.checked = lastSavedVisibility.show_sdlc_wizard;
+      visibilityError.textContent = e.message;
+      visibilityError.classList.remove("hidden");
+    } finally {
+      [showAuthorToggle, showLicenseToggle, showSdlcToggle].forEach((el) => { el.disabled = false; });
+    }
+  }
+
   loginBtn.addEventListener("click", login);
   passwordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   signOutBtn.addEventListener("click", signOut);
   byokToggle.addEventListener("change", onToggleChanged);
+  showAuthorToggle.addEventListener("change", onVisibilityToggleChanged);
+  showLicenseToggle.addEventListener("change", onVisibilityToggleChanged);
+  showSdlcToggle.addEventListener("change", onVisibilityToggleChanged);
 
   if (adminToken) {
     loadDashboard();

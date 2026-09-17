@@ -710,6 +710,13 @@
       const res = await fetch(`${API_BASE}/config`);
       const data = await res.json();
       testMode = !!data.test_mode;
+      // Admin-settable site visibility (see admin.html "Site visibility")
+      // — fails open (stays visible) on a /config hiccup, same reasoning
+      // as testMode above: a missed hide is a lot less disruptive than a
+      // link that vanishes because of a transient network error.
+      if (data.show_author_link === false) {
+        document.querySelectorAll(".author-link").forEach((el) => el.classList.add("hidden"));
+      }
     } catch (e) {
       // Fail open to "testing mode" rather than blocking Exact users on a
       // /config hiccup — worst case they see a needless note instead of

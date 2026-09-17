@@ -67,6 +67,7 @@
     .capability-row { grid-template-columns: 1fr; }
     h1 { font-size: 28px; }
   }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -111,12 +112,12 @@
         <p class="cap-desc">Prompts your app sends to a model — the walkthrough above.</p>
         <p style="margin:10px 0 0;"><a href="wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
       </div>
-      <div class="capability">
+      <div class="capability" id="licenseWizardCard">
         <p class="cap-title">License requests</p>
         <p class="cap-desc">Per-seat AI tool licenses — M365 Copilot, Cowork, ChatGPT Enterprise.</p>
         <p style="margin:10px 0 0;"><a href="license-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
       </div>
-      <div class="capability">
+      <div class="capability" id="sdlcWizardCard">
         <p class="cap-title">SDLC tool requests</p>
         <p class="cap-desc">Dev-tool AI seats and usage — GitHub Copilot, Microsoft Foundry, Cursor.</p>
         <p style="margin:10px 0 0;"><a href="sdlc-wizard.html" style="color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;">Demo →</a></p>
@@ -131,5 +132,26 @@
       <a href="developers.html">For developers</a>
     </div>
   </div>
+
+<script>
+  // Admin-settable site visibility (see admin.html "Site visibility") —
+  // hides the two newer wizard cards if their flag is off. Fails open
+  // (stays visible) on a /config hiccup — same reasoning used everywhere
+  // else this flag is checked.
+  (async function applyVisibility() {
+    try {
+      const res = await fetch("https://airi-mvp-api.onrender.com/config");
+      const data = await res.json();
+      if (data.show_license_wizard === false) {
+        document.getElementById("licenseWizardCard").classList.add("hidden");
+      }
+      if (data.show_sdlc_wizard === false) {
+        document.getElementById("sdlcWizardCard").classList.add("hidden");
+      }
+    } catch (e) {
+      // Fail open — leave both cards visible.
+    }
+  })();
+</script>
 </body>
 </html>

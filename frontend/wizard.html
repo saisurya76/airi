@@ -147,6 +147,7 @@
     .result-grid { grid-template-columns: 1fr; }
     .sample-box .k { flex-basis: 110px; }
   }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -194,6 +195,28 @@
   const API_BASE = "https://airi-mvp-api.onrender.com";
   const RUN_NAME = "BrightCart demo — TicketBot support traffic";
   const COMBINED_KEY = "airi_demo_combined_costs"; // shared with license-wizard.html + sdlc-wizard.html
+
+  // Admin-settable site visibility (see admin.html "Site visibility") —
+  // hides the finish-panel links to the two newer wizards if their flag
+  // is off. Fails open (stays visible) on a /config hiccup.
+  let visibilityConfig = null;
+  async function getVisibilityConfig() {
+    if (visibilityConfig) return visibilityConfig;
+    try {
+      const res = await fetch(`${API_BASE}/config`);
+      visibilityConfig = await res.json();
+    } catch (e) {
+      visibilityConfig = {};
+    }
+    return visibilityConfig;
+  }
+  async function applyVisibilityToFinishPanel() {
+    const data = await getVisibilityConfig();
+    const licenseBtn = document.getElementById("licenseWizardFinishBtn");
+    const sdlcBtn = document.getElementById("sdlcWizardFinishBtn");
+    if (data.show_license_wizard === false && licenseBtn) licenseBtn.classList.add("hidden");
+    if (data.show_sdlc_wizard === false && sdlcBtn) sdlcBtn.classList.add("hidden");
+  }
 
   function readCombined() {
     try { return JSON.parse(localStorage.getItem(COMBINED_KEY) || "{}"); }
@@ -715,10 +738,11 @@
       stepPanel.insertAdjacentHTML("beforeend", `
         <div class="finish-panel" style="margin-top:20px;">
           <a class="btn" href="app.html">Open AIRI now →</a>
-          <a class="btn secondary" href="license-wizard.html">License request demo →</a>
-          <a class="btn secondary" href="sdlc-wizard.html">SDLC tool demo →</a>
+          <a class="btn secondary" id="licenseWizardFinishBtn" href="license-wizard.html">License request demo →</a>
+          <a class="btn secondary" id="sdlcWizardFinishBtn" href="sdlc-wizard.html">SDLC tool demo →</a>
         </div>
       `);
+      applyVisibilityToFinishPanel();
     }
 
     updateChrome();

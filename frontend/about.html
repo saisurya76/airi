@@ -98,6 +98,7 @@
   }
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -251,12 +252,13 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
       plain price at all, in which case you enter your own), say how many seats you need, and get
       a monthly/annual total.</p>
       <ol>
-        <li>Two separate walkthroughs, kept apart from the API demo since the request shape is
-        different: <a href="license-wizard.html">License request wizard</a> and
-        <a href="sdlc-wizard.html">SDLC tool request wizard</a>.</li>
-        <li>Run any of the three demos (API, License, SDLC) and each one's result rolls into a
-        combined monthly total shown at the end — a management-level view across every kind of AI
-        spend, not just API bills.</li>
+        <li id="licenseWizardLink">Kept apart from the API demo since the request shape is
+        different: <a href="license-wizard.html">License request wizard</a>.</li>
+        <li id="sdlcWizardLink">Same idea for dev tools: <a href="sdlc-wizard.html">SDLC tool
+        request wizard</a>.</li>
+        <li>Run any of the demos above and each one's result rolls into a combined monthly total
+        shown at the end — a management-level view across every kind of AI spend, not just API
+        bills.</li>
       </ol>
     </div>
 
@@ -277,5 +279,25 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
       <a href="developers.html">For developers</a>
     </div>
   </div>
+
+<script>
+  // Admin-settable site visibility (see admin.html "Site visibility") —
+  // hides the two newer wizard's mention list items if their flag is off.
+  // Fails open (stays visible) on a /config hiccup.
+  (async function applyVisibility() {
+    try {
+      const res = await fetch("https://airi-mvp-api.onrender.com/config");
+      const data = await res.json();
+      if (data.show_license_wizard === false) {
+        document.getElementById("licenseWizardLink").classList.add("hidden");
+      }
+      if (data.show_sdlc_wizard === false) {
+        document.getElementById("sdlcWizardLink").classList.add("hidden");
+      }
+    } catch (e) {
+      // Fail open — leave both list items visible.
+    }
+  })();
+</script>
 </body>
 </html>

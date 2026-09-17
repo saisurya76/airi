@@ -1975,7 +1975,8 @@
     }
     try {
       const res = await fetch(`${API_BASE}/config`);
-      testMode = !!(await res.json()).test_mode;
+      const data = await res.json();
+      testMode = !!data.test_mode;
     } catch (e) {
       testMode = true;
     }
@@ -1983,7 +1984,24 @@
     await loadWorkspaces();
   }
 
+  // Admin-settable site visibility (see admin.html "Site visibility") —
+  // hides the top-nav Author link. Runs regardless of sign-in state,
+  // since the top-nav (and its Author link) is visible on the signed-out
+  // gate too. Fails open (stays visible) on a /config hiccup.
+  async function applyAuthorLinkVisibility() {
+    try {
+      const res = await fetch(`${API_BASE}/config`);
+      const data = await res.json();
+      if (data.show_author_link === false) {
+        document.querySelectorAll(".author-link").forEach((el) => el.classList.add("hidden"));
+      }
+    } catch (e) {
+      // Fail open — leave the Author link visible.
+    }
+  }
+
   async function init() {
+    applyAuthorLinkVisibility();
     if (!authToken) {
       signInView.classList.remove("hidden");
       return;

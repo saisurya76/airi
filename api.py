@@ -326,6 +326,16 @@ class AdminConfigBody(BaseModel):
     test_mode: bool
 
 
+class AdminVisibilityBody(BaseModel):
+    """Full replace, same semantics as AdminConfigBody/AuthorProfileBody —
+    the admin page always sends all three current toggle states together,
+    so a field left out here is never accidentally implied by omission."""
+
+    show_author_link: bool = True
+    show_license_wizard: bool = True
+    show_sdlc_wizard: bool = True
+
+
 class AuthorProfileBody(BaseModel):
     """All optional/defaulted — a field left out is stored as "" (this
     is a full replace, same semantics as AdminConfigBody's test_mode;
@@ -443,13 +453,16 @@ def health():
 @app.get("/config")
 def public_config():
     """Public, unauthenticated: just enough for the frontend to decide
-    what to show a signed-in user in the Exact flow — a BYOK key panel
+    what to show. test_mode drives the Exact flow — a BYOK key panel
     (test_mode: false) or a "you're using AIRI's testing keys" note
-    (test_mode: true). Never exposes whether any secret is actually
-    configured — that's only in GET /admin/config, behind the admin
-    password."""
+    (test_mode: true). The show_* fields are the admin-settable site
+    visibility toggles (see runtime_config.py) — every page that links to
+    the Author profile or the two newer demo wizards checks these and
+    hides that link when its flag is false. Never exposes whether any
+    secret is actually configured — that's only in GET /admin/config,
+    behind the admin password."""
     test_mode, _source = runtime_config.get_test_mode()
-    return {"test_mode": test_mode}
+    return {"test_mode": test_mode, **runtime_config.get_all_visibility()}
 
 
 @app.get("/models")
@@ -1298,6 +1311,7 @@ def admin_get_config(authorization: Optional[str] = Header(default=None)):
             "resend": bool(os.environ.get("RESEND_API_KEY") and os.environ.get("RESEND_FROM_EMAIL")),
             "database": bool(os.environ.get("DATABASE_URL")),
         },
+        "visibility": runtime_config.get_all_visibility(),
     }
 
 
@@ -1313,6 +1327,24 @@ def admin_set_config(body: AdminConfigBody, authorization: Optional[str] = Heade
         raise HTTPException(status_code=503, detail=str(exc))
     test_mode, source = runtime_config.get_test_mode()
     return {"test_mode": test_mode, "source": source}
+
+
+@app.post("/admin/visibility")
+def admin_set_visibility(body: AdminVisibilityBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only: sets the three site visibility toggles (Author page
+    link, License wizard, SDLC wizard) in one call — the admin page's
+    "Site visibility" panel always sends all three current switch states
+    together, same full-replace convention as /admin/config and
+    /admin/author. See runtime_config.py for what hiding a flag actually
+    does on the frontend."""
+    _require_admin(authorization)
+    try:
+        runtime_config.set_visibility("show_author_link", body.show_author_link)
+        runtime_config.set_visibility("show_license_wizard", body.show_license_wizard)
+        runtime_config.set_visibility("show_sdlc_wizard", body.show_sdlc_wizard)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return runtime_config.get_all_visibility()
 
 
 @app.get("/author")

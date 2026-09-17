@@ -153,6 +153,7 @@
     .result-grid { grid-template-columns: 1fr; }
     .row-fields { grid-template-columns: 1fr; }
   }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -161,7 +162,7 @@
       <a href="index.html">← Back to AIRI</a>
       <span>
         <a href="wizard.html">API demo</a> ·
-        <a href="sdlc-wizard.html">SDLC demo →</a>
+        <a href="sdlc-wizard.html" class="sdlc-cross-link">SDLC demo →</a>
       </span>
     </div>
 
@@ -202,6 +203,7 @@
   const API_BASE = "https://airi-mvp-api.onrender.com";
   const COMBINED_KEY = "airi_demo_combined_costs"; // shared with wizard.html + sdlc-wizard.html
   const PRICING_LIST_ENDPOINT = "/pricing/license-tools";
+  let hideSdlcCrossLink = false; // set by checkVisibilityAndInit, applied on every renderStep
 
   function esc(str) {
     const d = document.createElement("div");
@@ -494,10 +496,13 @@
     if (s.isFinal) {
       stepPanel.insertAdjacentHTML("beforeend", `
         <div class="finish-panel" style="margin-top:20px;">
-          <a class="btn" href="sdlc-wizard.html">Try the SDLC tools wizard →</a>
+          <a class="btn sdlc-cross-link" href="sdlc-wizard.html">Try the SDLC tools wizard →</a>
           <a class="btn secondary" href="app.html">Open AIRI →</a>
         </div>
       `);
+      if (hideSdlcCrossLink) {
+        document.querySelectorAll(".sdlc-cross-link").forEach((el) => el.classList.add("hidden"));
+      }
     }
     done.add(current);
     updateChrome();
@@ -522,8 +527,38 @@
     renderStep();
   }
 
-  buildDots();
-  initTools();
+  // Admin-settable site visibility (see admin.html "Site visibility").
+  // If this wizard itself is hidden, swap the whole page for a short
+  // notice instead of loading it. If only the sibling SDLC wizard is
+  // hidden, just hide the cross-links to it. Fails open (nothing hidden)
+  // on a /config hiccup.
+  async function checkVisibilityAndInit() {
+    let data = {};
+    try {
+      const res = await fetch(`${API_BASE}/config`);
+      data = await res.json();
+    } catch (e) {
+      data = {};
+    }
+    if (data.show_license_wizard === false) {
+      document.querySelector(".wrap").innerHTML = `
+        <div class="panel" style="text-align:center;padding:40px 20px;">
+          <h2 style="margin-top:0;">License request wizard isn't available right now</h2>
+          <p class="sub">Check back later, or explore the rest of AIRI.</p>
+          <p style="margin-top:20px;"><a class="btn" href="index.html">← Back to AIRI</a></p>
+        </div>
+      `;
+      return;
+    }
+    hideSdlcCrossLink = data.show_sdlc_wizard === false;
+    if (hideSdlcCrossLink) {
+      document.querySelectorAll(".sdlc-cross-link").forEach((el) => el.classList.add("hidden"));
+    }
+    buildDots();
+    initTools();
+  }
+
+  checkVisibilityAndInit();
 </script>
 </body>
 </html>
