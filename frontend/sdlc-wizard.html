@@ -1,10 +1,11 @@
 <!--
   Demo wizard for AIRI's third "AI request" type: an SDLC/dev-tool
-  request — an engineering team wanting an AI coding assistant seat
-  (GitHub Copilot, Cursor, ...) or usage-based API access (Microsoft
-  Foundry). Same pattern as license-wizard.html, separate vendor list,
-  shares the same localStorage combined-total key so a visitor who runs
-  all three wizards sees one grand total across API + License + SDLC.
+  request — an engineering team wanting one or more AI coding assistant
+  seats (GitHub Copilot, Cursor, ...) or usage-based API access
+  (Microsoft Foundry). Same line-item builder pattern as
+  license-wizard.html (add as many tool rows as needed), separate vendor
+  list, shares the same localStorage combined-total key so a visitor who
+  runs all three wizards sees one grand total across API + License + SDLC.
 -->
 <!doctype html>
 <html lang="en">
@@ -33,7 +34,7 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     line-height: 1.5;
   }
-  .wrap { max-width: 720px; margin: 0 auto; }
+  .wrap { max-width: 760px; margin: 0 auto; }
   .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
   .top-bar a { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
   .top-bar a:hover { text-decoration: underline; }
@@ -71,7 +72,7 @@
   .step-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
   .step-blurb { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
 
-  label { display: block; font-size: 12.5px; color: var(--muted); margin: 14px 0 5px; font-weight: 600; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 10px 0 5px; font-weight: 600; }
   label:first-of-type { margin-top: 0; }
   select, input[type="number"], input[type="text"] {
     width: 100%; background: #0f1115; border: 1px solid var(--border); color: var(--text);
@@ -100,13 +101,24 @@
     color: var(--muted); font-size: 12px; margin-top: 12px; background: rgba(242,184,75,0.08);
     border: 1px solid rgba(242,184,75,0.3); border-radius: 8px; padding: 8px 10px;
   }
-  .live-note {
-    color: var(--muted); font-size: 12px; margin-top: 12px; background: rgba(62,207,142,0.08);
-    border: 1px solid rgba(62,207,142,0.3); border-radius: 8px; padding: 8px 10px;
-  }
   table.mini-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
   table.mini-table th, table.mini-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   table.mini-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+
+  .tool-card {
+    background: #0f1115; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-bottom: 12px;
+  }
+  .row-head { display: flex; gap: 8px; align-items: center; }
+  .row-head select { flex: 1; }
+  .row-head .row-remove { flex: 0 0 auto; padding: 8px 12px; font-size: 12.5px; }
+  .row-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 4px; }
+  .row-price-line { display: flex; gap: 8px; }
+  .row-price-line input { flex: 1; }
+  .row-price-line button { flex: 0 0 auto; font-size: 12.5px; padding: 9px 12px; white-space: nowrap; }
+  .row-total { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
+  .row-total b { color: var(--text); font-size: 14px; }
+  #addRowBtn { margin-top: 4px; }
 
   .nav-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
   .nav-row .spacer { flex: 1; }
@@ -126,6 +138,7 @@
   .site-footer a:hover { color: var(--accent); }
   @media (max-width: 480px) {
     .result-grid { grid-template-columns: 1fr; }
+    .row-fields { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -141,18 +154,17 @@
 
     <h1>SDLC tool request wizard</h1>
     <p class="sub">
-      BrightCart's engineering team wants an AI coding assistant — a developer-tool request, the
-      third AI request shape AIRI covers alongside API traffic and per-seat utility licenses. Pick
-      a real vendor, AIRI tries to fetch its <em>current</em> public price live, and you say how
-      many developer seats (or expected usage spend) you need.
+      BrightCart's engineering team wants AI dev tools — add as many as this round's request
+      includes. Pick a real vendor per row, AIRI tries to fetch its <em>current</em> public price
+      live, you say how many developer seats (or expected usage spend for a usage-based tool).
     </p>
 
     <div class="wizard-head">
       <div class="progress-row">
-        <span id="stepLabel">Step 1 of 5</span>
-        <span id="totalTop"></span>
+        <span id="stepLabel">Step 1 of 2</span>
+        <span></span>
       </div>
-      <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:20%;"></div></div>
+      <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:50%;"></div></div>
       <div class="step-dots" id="stepDots"></div>
     </div>
 
@@ -175,6 +187,7 @@
 <script>
   const API_BASE = "https://airi-mvp-api.onrender.com";
   const COMBINED_KEY = "airi_demo_combined_costs"; // shared with wizard.html + license-wizard.html
+  const PRICING_LIST_ENDPOINT = "/pricing/sdlc-tools";
 
   function esc(str) {
     const d = document.createElement("div");
@@ -214,18 +227,23 @@
     `;
   }
 
-  const state = { tools: [], selectedId: null, priceSource: null, priceValue: null, seats: 18 };
+  // ---------------------------------------------------------------------
+  // Vendors + line-item rows
+  // ---------------------------------------------------------------------
+  let TOOLS = [];
+  let toolsError = null;
+  let rows = [];
+  let rowCounter = 0;
 
-  function selectedTool() { return state.tools.find(t => t.id === state.selectedId); }
   function isUsageBased(tool) { return !!tool && /usage-based/i.test(tool.billing_unit); }
+  function findTool(id) { return TOOLS.find(t => t.id === id); }
+  function newRow() { return { id: rowCounter++, toolId: TOOLS[0] ? TOOLS[0].id : null, price: null, priceSource: null, seats: 10 }; }
 
   async function loadTools() {
-    const res = await fetch(`${API_BASE}/pricing/sdlc-tools`);
+    const res = await fetch(`${API_BASE}${PRICING_LIST_ENDPOINT}`);
     if (!res.ok) throw new Error("Couldn't load the vendor list.");
-    state.tools = await res.json();
-    return state.tools;
+    return res.json();
   }
-
   async function fetchLivePrice(toolId) {
     const res = await fetch(`${API_BASE}/pricing/${toolId}/live`);
     const data = await res.json();
@@ -233,131 +251,163 @@
     return data;
   }
 
+  function computeRowMonthly(row) {
+    const tool = findTool(row.toolId);
+    if (row.price == null) return 0;
+    if (isUsageBased(tool)) return row.price;
+    return row.price * (row.seats || 0);
+  }
+  function rowsValid() {
+    if (toolsError || !rows.length) return false;
+    return rows.every((r) => {
+      const tool = findTool(r.toolId);
+      if (!r.toolId || r.price == null || r.price < 0) return false;
+      if (isUsageBased(tool)) return true;
+      return r.seats > 0;
+    });
+  }
+  function combinedRowsMonthly() { return rows.reduce((s, r) => s + computeRowMonthly(r), 0); }
+
+  function renderRowHtml(row) {
+    const tool = findTool(row.toolId);
+    const usage = isUsageBased(tool);
+    return `
+      <div class="tool-card" data-row-id="${row.id}">
+        <div class="row-head">
+          <select class="row-tool" data-row-id="${row.id}">
+            ${TOOLS.map(t => `<option value="${esc(t.id)}" ${t.id === row.toolId ? "selected" : ""}>${esc(t.name)} — ${esc(t.vendor)}</option>`).join("")}
+          </select>
+          <button type="button" class="row-remove secondary-btn" data-row-id="${row.id}">Remove</button>
+        </div>
+        ${tool ? `<div class="field-note">${esc(tool.billing_unit)} · <a href="${esc(tool.pricing_url)}" target="_blank" rel="noopener">vendor pricing page</a>${tool.note ? " — " + esc(tool.note) : ""}</div>` : ""}
+        <div class="row-fields">
+          <div>
+            <label>${usage ? "Expected monthly spend (USD)" : "Price / seat / month (USD)"}</label>
+            <div class="row-price-line">
+              <input type="number" class="row-price" data-row-id="${row.id}" min="0" step="0.01" value="${row.price != null ? row.price : ""}" placeholder="${usage ? "e.g. 400" : "e.g. 19"}" />
+              ${usage ? "" : `<button type="button" class="row-fetch-btn secondary-btn" data-row-id="${row.id}">Fetch live</button>`}
+            </div>
+            <div class="field-note row-status" data-row-id="${row.id}"></div>
+          </div>
+          ${usage ? "" : `
+          <div>
+            <label>Developer seats</label>
+            <input type="number" class="row-seats" data-row-id="${row.id}" min="1" step="1" value="${row.seats}" />
+          </div>`}
+        </div>
+        <div class="row-total" data-row-id="${row.id}"><b>${money(computeRowMonthly(row))}</b>/mo</div>
+      </div>
+    `;
+  }
+
+  function buildTotalsHtml() {
+    return `
+      <div class="result-grid">
+        <div class="stat"><div class="label">Tools in this request</div><div class="value">${rows.length}</div></div>
+        <div class="stat"><div class="label">Combined monthly</div><div class="value">${money(combinedRowsMonthly())}</div></div>
+      </div>
+    `;
+  }
+
+  function renderBuildStep() {
+    if (toolsError) {
+      return `<div class="error">${esc(toolsError)}</div><button type="button" id="retryLoadBtn" class="secondary-btn" style="margin-top:10px;">Retry</button>`;
+    }
+    return `
+      <div id="rowsContainer">${rows.map(renderRowHtml).join("")}</div>
+      <button type="button" id="addRowBtn" class="secondary-btn">+ Add another tool</button>
+      <div class="result-box" id="buildTotals">${buildTotalsHtml()}</div>
+    `;
+  }
+
+  function attachBuildStep() {
+    if (toolsError) {
+      document.getElementById("retryLoadBtn").addEventListener("click", initTools);
+      nextBtn.disabled = true;
+      return;
+    }
+    const container = document.getElementById("rowsContainer");
+
+    function refreshRow(id) {
+      const row = rows.find(r => r.id === id);
+      const card = container.querySelector(`.tool-card[data-row-id="${id}"] .row-total`);
+      if (card && row) card.innerHTML = `<b>${money(computeRowMonthly(row))}</b>/mo`;
+      document.getElementById("buildTotals").innerHTML = buildTotalsHtml();
+      nextBtn.disabled = !rowsValid();
+    }
+
+    container.addEventListener("change", (e) => {
+      if (!e.target.classList.contains("row-tool")) return;
+      const id = parseInt(e.target.dataset.rowId, 10);
+      const row = rows.find(r => r.id === id);
+      if (!row) return;
+      row.toolId = e.target.value;
+      row.price = null;
+      row.priceSource = null;
+      renderStep(); // field shape (usage-based vs seats) can change with the tool
+    });
+
+    container.addEventListener("input", (e) => {
+      const id = parseInt(e.target.dataset.rowId, 10);
+      const row = rows.find(r => r.id === id);
+      if (!row) return;
+      if (e.target.classList.contains("row-price")) {
+        row.price = e.target.value ? parseFloat(e.target.value) : null;
+        row.priceSource = row.priceSource || "manual";
+        refreshRow(id);
+      } else if (e.target.classList.contains("row-seats")) {
+        row.seats = parseInt(e.target.value, 10) || 0;
+        refreshRow(id);
+      }
+    });
+
+    container.addEventListener("click", async (e) => {
+      if (e.target.classList.contains("row-remove")) {
+        const id = parseInt(e.target.dataset.rowId, 10);
+        rows = rows.filter(r => r.id !== id);
+        if (!rows.length) rows.push(newRow());
+        renderStep();
+        return;
+      }
+      if (e.target.classList.contains("row-fetch-btn")) {
+        const id = parseInt(e.target.dataset.rowId, 10);
+        const row = rows.find(r => r.id === id);
+        const statusEl = container.querySelector(`.row-status[data-row-id="${id}"]`);
+        e.target.disabled = true;
+        statusEl.textContent = "Fetching the vendor's pricing page…";
+        try {
+          const data = await fetchLivePrice(row.toolId);
+          row.price = data.price_per_seat;
+          row.priceSource = "live";
+          const priceInput = container.querySelector(`.row-price[data-row-id="${id}"]`);
+          priceInput.value = data.price_per_seat;
+          statusEl.innerHTML = `✓ Fetched $${data.price_per_seat}/seat/month from <a href="${esc(data.source_url)}" target="_blank" rel="noopener">the vendor's pricing page</a>${data.cached ? " (cached)" : ""} — verify against your actual contract.`;
+          refreshRow(id);
+        } catch (err) {
+          statusEl.innerHTML = `<span style="color:var(--exceeded);">${esc(err.message)} — enter the price yourself.</span>`;
+        } finally {
+          e.target.disabled = false;
+        }
+      }
+    });
+
+    document.getElementById("addRowBtn").addEventListener("click", () => {
+      rows.push(newRow());
+      renderStep();
+    });
+
+    nextBtn.disabled = !rowsValid();
+  }
+
   // ---------------------------------------------------------------------
   const STEPS = [
     {
-      title: "Pick the tool BrightCart's engineers want",
+      title: "Build BrightCart's SDLC tool request",
       kind: "live",
-      blurb: "Same shape as any dev-tool AI request that lands on an engineering lead's desk: which assistant, which tier.",
-      render: () => `
-        <label for="toolSelect">Tool</label>
-        <select id="toolSelect"></select>
-        <div class="field-note" id="toolNote"></div>
-      `,
-      attach: async () => {
-        const sel = document.getElementById("toolSelect");
-        const note = document.getElementById("toolNote");
-        sel.innerHTML = `<option>Loading vendors…</option>`;
-        try {
-          const tools = await loadTools();
-          sel.innerHTML = tools.map(t => `<option value="${esc(t.id)}">${esc(t.name)} — ${esc(t.vendor)}</option>`).join("");
-          if (state.selectedId) sel.value = state.selectedId;
-          else state.selectedId = sel.value;
-          const updateNote = () => {
-            const t = selectedTool();
-            note.textContent = t ? `${t.billing_unit} · public pricing: ${t.pricing_url}${t.note ? " — " + t.note : ""}` : "";
-          };
-          updateNote();
-          sel.addEventListener("change", () => { state.selectedId = sel.value; state.priceValue = null; updateNote(); });
-        } catch (e) {
-          sel.innerHTML = `<option>Couldn't load vendors</option>`;
-          note.textContent = e.message;
-        }
-      },
-      canAdvance: () => !!state.selectedId,
-    },
-    {
-      title: "Fetch its current price",
-      kind: "live",
-      blurb: "AIRI fetches the vendor's own public pricing page right now and looks for a per-seat price — a genuine live attempt, not a stored number. Usage-based tools (like Microsoft Foundry) don't publish a flat seat price at all, so this step will typically ask you to enter an expected spend instead.",
-      render: () => {
-        const t = selectedTool();
-        const usage = isUsageBased(t);
-        return `
-          <button type="button" id="fetchPriceBtn" ${usage ? "disabled" : ""}>${usage ? "No per-seat price to fetch (usage-based)" : "Fetch live price"}</button>
-          <div id="fetchStatus" class="run-note"></div>
-          <div id="fetchResult"></div>
-          <label for="manualPrice" style="margin-top:16px;">${usage ? "Expected monthly spend (USD)" : "Price per seat / month (USD)"} — edit or enter manually</label>
-          <input type="number" id="manualPrice" min="0" step="0.01" placeholder="${usage ? "e.g. 400.00" : "e.g. 19.00"}" value="${state.priceValue != null ? state.priceValue : ""}" />
-        `;
-      },
-      attach: () => {
-        const btn = document.getElementById("fetchPriceBtn");
-        const status = document.getElementById("fetchStatus");
-        const result = document.getElementById("fetchResult");
-        const manual = document.getElementById("manualPrice");
-        manual.addEventListener("input", () => { state.priceValue = manual.value ? parseFloat(manual.value) : null; state.priceSource = state.priceSource || "manual"; });
-        if (btn.disabled) return;
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
-          status.textContent = "Fetching the vendor's pricing page…";
-          result.innerHTML = "";
-          try {
-            const data = await fetchLivePrice(state.selectedId);
-            status.textContent = "";
-            state.priceValue = data.price_per_seat;
-            state.priceSource = "live";
-            manual.value = data.price_per_seat;
-            result.innerHTML = `<div class="live-note">✓ Fetched $${data.price_per_seat}/seat/month just now from <a href="${esc(data.source_url)}" target="_blank" rel="noopener">${esc(data.source_url)}</a>${data.cached ? " (cached from a recent fetch)" : ""}. Verify this matches your actual contract before treating it as final.</div>`;
-          } catch (e) {
-            status.textContent = "";
-            result.innerHTML = `<div class="error">${esc(e.message)} — enter the price yourself below instead.</div>`;
-          } finally {
-            btn.disabled = false;
-          }
-        });
-      },
-      canAdvance: () => state.priceValue != null && state.priceValue >= 0,
-    },
-    {
-      title: "How many developer seats?",
-      kind: "demo",
-      blurb: "For a usage-based tool this step is skipped in the math — your expected spend from the previous step already is the monthly total.",
-      render: () => {
-        const t = selectedTool();
-        if (isUsageBased(t)) {
-          return `<div class="demo-note">${esc(t.name)} bills by usage, not by seat — nothing to enter here. Your expected monthly spend from the previous step carries straight through to the total.</div>`;
-        }
-        return `
-          <label for="seatsInput">Number of developer seats</label>
-          <input type="number" id="seatsInput" min="1" step="1" value="${state.seats}" />
-          <div class="field-note">BrightCart's engineering team, for this walkthrough.</div>
-        `;
-      },
-      attach: () => {
-        const input = document.getElementById("seatsInput");
-        if (input) input.addEventListener("input", () => { state.seats = parseInt(input.value, 10) || 0; });
-      },
-      canAdvance: () => { const t = selectedTool(); return isUsageBased(t) || state.seats > 0; },
-    },
-    {
-      title: "Total SDLC tool cost",
-      kind: "demo",
-      blurb: "Seats × price per seat — or, for a usage-based tool, your entered expected spend directly.",
-      render: () => {
-        const t = selectedTool();
-        const usage = isUsageBased(t);
-        const seats = usage ? 1 : state.seats;
-        const monthly = usage ? state.priceValue : state.priceValue * state.seats;
-        return `
-          <table class="mini-table">
-            <tr><th>Tool</th><th>${usage ? "Billing" : "Seats"}</th><th>${usage ? "" : "Price/seat/mo"}</th><th>Monthly total</th></tr>
-            <tr>
-              <td>${esc(t ? t.name : state.selectedId)}</td>
-              <td>${usage ? "Usage-based" : state.seats}</td>
-              <td>${usage ? "—" : money(state.priceValue)}</td>
-              <td>${money(monthly)}</td>
-            </tr>
-          </table>
-          <div class="result-grid" style="margin-top:12px;">
-            <div class="stat"><div class="label">Monthly</div><div class="value">${money(monthly)}</div></div>
-            <div class="stat"><div class="label">Annual</div><div class="value">${money(monthly * 12)}</div></div>
-          </div>
-          <div class="demo-note">Price source: ${state.priceSource === "live" ? "fetched live from the vendor's pricing page" : "entered manually"}.</div>
-        `;
-      },
-      attach: () => {},
-      canAdvance: () => true,
+      blurb: "A real request rarely has just one tool — add every dev-tool license (or usage-based tool) this round covers. Pick a vendor per row; AIRI tries to fetch its current price live, or type in your own. Usage-based tools like Microsoft Foundry ask for an expected spend instead of seats.",
+      render: renderBuildStep,
+      attach: attachBuildStep,
+      canAdvance: () => rowsValid(),
     },
     {
       title: "Done — this counts toward your combined AI request cost",
@@ -365,14 +415,20 @@
       isFinal: true,
       blurb: "AIRI treats an SDLC tool request as one of three AI request shapes — alongside API traffic and per-seat utility licenses — so a management team can see the whole AI spend picture in one place.",
       render: () => {
-        const t = selectedTool();
-        const usage = isUsageBased(t);
-        const monthly = usage ? state.priceValue : state.priceValue * state.seats;
-        writeCombinedEntry("sdlc", monthly, `${t ? t.name : state.selectedId}${usage ? "" : " × " + state.seats + " seats"}`);
+        const total = combinedRowsMonthly();
+        writeCombinedEntry("sdlc", total, `${rows.length} tool${rows.length === 1 ? "" : "s"}`);
         return `
-          <div class="result-grid">
-            <div class="stat"><div class="label">This request's monthly cost</div><div class="value">${money(monthly)}</div></div>
-            <div class="stat"><div class="label">${usage ? "Billing" : "Seats"}</div><div class="value">${usage ? "Usage-based" : state.seats}</div></div>
+          <table class="mini-table">
+            <tr><th>Tool</th><th>Billing</th><th>Monthly</th></tr>
+            ${rows.map((r) => {
+              const tool = findTool(r.toolId);
+              const usage = isUsageBased(tool);
+              return `<tr><td>${esc(tool ? tool.name : r.toolId)}</td><td>${usage ? "Usage-based" : r.seats + " seats"}</td><td>${money(computeRowMonthly(r))}</td></tr>`;
+            }).join("")}
+          </table>
+          <div class="result-grid" style="margin-top:12px;">
+            <div class="stat"><div class="label">Monthly</div><div class="value">${money(total)}</div></div>
+            <div class="stat"><div class="label">Annual</div><div class="value">${money(total * 12)}</div></div>
           </div>
           ${combinedTotalHtml()}
         `;
@@ -395,7 +451,7 @@
   function buildDots() {
     stepDots.innerHTML = STEPS.map((_, i) => `<div class="step-dot" data-i="${i}">${i + 1}</div>`).join("");
     stepDots.querySelectorAll(".step-dot").forEach((dot) => {
-      dot.addEventListener("click", () => { current = parseInt(dot.dataset.i, 10); renderStep(); });
+      dot.addEventListener("click", () => { if (dot.dataset.i == 0 || rowsValid()) { current = parseInt(dot.dataset.i, 10); renderStep(); } });
     });
   }
 
@@ -412,7 +468,7 @@
     nextBtn.disabled = !s.canAdvance();
   }
 
-  async function renderStep() {
+  function renderStep() {
     const s = STEPS[current];
     stepPanel.innerHTML = `
       <span class="kind-badge ${s.kind}">${s.kind === "live" ? "Live" : "Demo"}</span>
@@ -420,7 +476,7 @@
       <p class="step-blurb">${s.blurb}</p>
       <div id="stepBody">${s.render()}</div>
     `;
-    await s.attach();
+    s.attach();
     if (s.isFinal) {
       stepPanel.insertAdjacentHTML("beforeend", `
         <div class="finish-panel" style="margin-top:20px;">
@@ -431,19 +487,29 @@
     }
     done.add(current);
     updateChrome();
-    stepPanel.addEventListener("input", () => { nextBtn.disabled = !s.canAdvance(); });
-    stepPanel.addEventListener("click", () => { nextBtn.disabled = !s.canAdvance(); });
     window.scrollTo({ top: stepPanel.offsetTop - 20, behavior: "smooth" });
   }
 
   prevBtn.addEventListener("click", () => { if (current > 0) { current--; renderStep(); } });
   nextBtn.addEventListener("click", () => {
-    if (current < STEPS.length - 1) { current++; renderStep(); }
-    else { current = 0; renderStep(); }
+    if (current < STEPS.length - 1 && STEPS[current].canAdvance()) { current++; renderStep(); }
+    else if (current === STEPS.length - 1) { current = 0; renderStep(); }
   });
 
+  async function initTools() {
+    toolsError = null;
+    stepPanel.innerHTML = `<p class="step-blurb">Loading vendors…</p>`;
+    try {
+      TOOLS = await loadTools();
+      rows = [newRow()];
+    } catch (e) {
+      toolsError = e.message || "Couldn't load the vendor list.";
+    }
+    renderStep();
+  }
+
   buildDots();
-  renderStep();
+  initTools();
 </script>
 </body>
 </html>
