@@ -384,6 +384,7 @@ class ProjectBody(BaseModel):
     title: str = ""
     description: str = ""
     tech_stack: Dict[str, str] = Field(default_factory=dict)
+    project_type: str = ws.DEFAULT_PROJECT_TYPE
 
 
 class NoteBody(BaseModel):
@@ -930,6 +931,14 @@ def tech_stack_categories():
     return ws.TECH_STACK_CATEGORIES
 
 
+@app.get("/projects/project-types")
+def project_types():
+    """The project-type selector's option list (key -> label), so the
+    frontend never has to hardcode it separately from
+    airi/workspaces.py — add a type there and it shows up here."""
+    return ws.PROJECT_TYPES
+
+
 @app.post("/workspaces/{workspace_id}/projects")
 def create_project(workspace_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only: creating a project is a workspace-identity operation,
@@ -938,10 +947,10 @@ def create_project(workspace_id: int, body: ProjectBody, authorization: Optional
     user_id = _require_user_id(authorization)
     _require_workspace_admin(workspace_id, user_id)
     try:
-        title, description, tech_stack = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {**db.create_project(workspace_id, title, description, tech_stack), "role": "admin"}
+    return {**db.create_project(workspace_id, title, description, tech_stack, project_type), "role": "admin"}
 
 
 @app.get("/projects/{project_id}")
@@ -953,15 +962,16 @@ def get_project(project_id: int, authorization: Optional[str] = Header(default=N
 
 @app.put("/projects/{project_id}")
 def update_project(project_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
-    """Admin-only: a team member can't rename a project or change its
-    tech stack, only work inside it (run tools, add notes)."""
+    """Admin-only: a team member can't rename a project, change its
+    type, or change its tech stack, only work inside it (run tools, add
+    notes)."""
     user_id = _require_user_id(authorization)
     _require_project_admin(project_id, user_id)
     try:
-        title, description, tech_stack = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {**db.update_project(project_id, title, description, tech_stack), "role": "admin"}
+    return {**db.update_project(project_id, title, description, tech_stack, project_type), "role": "admin"}
 
 
 @app.delete("/projects/{project_id}")
@@ -1203,8 +1213,12 @@ def get_tool_run_pdf(project_id: int, tool: tool_runs.ToolName, run_id: int, aut
 
 
 def _build_workspace_comparison(workspace_id: int, user_id: int, email: str) -> Dict[str, Any]:
+    """Only "api_request" projects are compared — the 4 tools this rolls
+    up (Standard/Exact/Traffic/Load-test) don't apply to a License or
+    SDLC tool request project, so including one here would just be an
+    all-zero row, not a real comparison point."""
     workspace, _role = _get_accessible_workspace(workspace_id, user_id)
-    projects = db.list_projects(workspace_id)
+    projects = [p for p in db.list_projects(workspace_id) if p.get("project_type", ws.DEFAULT_PROJECT_TYPE) == ws.DEFAULT_PROJECT_TYPE]
     summaries = []
     for proj in projects:
         runs_by_tool = {t.value: db.list_tool_runs(proj["id"], t.value) for t in tool_runs.ToolName}

@@ -127,12 +127,18 @@ REQUIRED_TECH_STACK_CATEGORIES = tuple(
 )
 
 
-def validate_tech_stack(data: Dict[str, Any]) -> Dict[str, str]:
+def validate_tech_stack(data: Dict[str, Any], require_full: bool = True) -> Dict[str, str]:
     """Takes a dict of (a subset of) TECH_STACK_CATEGORIES keys -> free
     text, returns a fully-populated dict (every category present, unset
     optional ones as ""). Unknown keys are silently dropped, same
-    convention as airi.author.validate_profile. Raises WorkspaceError if
-    a required category is missing/blank or any value is too long."""
+    convention as airi.author.validate_profile.
+
+    Raises WorkspaceError if any value is too long, and — only when
+    require_full is True (the default) — if a required category is
+    missing/blank. require_full=False is for a project whose type isn't
+    "api_request" (see PROJECT_TYPES): a License/SDLC-tool request project
+    doesn't make calls to an AI service/model the way an API-traffic
+    project does, so "AI service/provider" and "AI model" don't apply."""
     result = {key: "" for key in TECH_STACK_CATEGORIES}
     for key, meta in TECH_STACK_CATEGORIES.items():
         value = data.get(key)
@@ -145,15 +151,47 @@ def validate_tech_stack(data: Dict[str, Any]) -> Dict[str, str]:
             raise WorkspaceError(f"'{meta['label']}' is too long (max {TECH_STACK_VALUE_MAX_CHARS} characters).")
         result[key] = value
 
-    for key in REQUIRED_TECH_STACK_CATEGORIES:
-        if not result[key]:
-            raise WorkspaceError(f"'{TECH_STACK_CATEGORIES[key]['label']}' is required for every project.")
+    if require_full:
+        for key in REQUIRED_TECH_STACK_CATEGORIES:
+            if not result[key]:
+                raise WorkspaceError(f"'{TECH_STACK_CATEGORIES[key]['label']}' is required for every project.")
     return result
 
 
-def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str]]:
-    """Returns (title, description, tech_stack). Raises WorkspaceError on
-    the first problem found."""
+# ---------- projects: type ----------
+#
+# Every project is one of three request types. "api_request" is the
+# original (and, until this field existed, only) kind — a project whose
+# saved runs come from AIRI's four API-traffic tools (Standard, Exact,
+# Traffic projection, Load-test report). "license_request" and
+# "sdlc_request" mirror the two newer demo wizards (frontend/
+# license-wizard.html, frontend/sdlc-wizard.html) — a project of either
+# kind is for organizing that request and its notes, not for running the
+# API-traffic tools, which don't apply to a per-seat license or a dev-tool
+# seat/usage request.
+
+PROJECT_TYPES = {
+    "api_request": {"label": "API request"},
+    "license_request": {"label": "License request"},
+    "sdlc_request": {"label": "SDLC tool request"},
+}
+
+DEFAULT_PROJECT_TYPE = "api_request"
+
+
+def validate_project_type(value: Any) -> str:
+    """Normalizes and validates a project's type. Blank/missing defaults
+    to DEFAULT_PROJECT_TYPE — every project AIRI tracked before this
+    field existed was, implicitly, an API request project."""
+    value = (value or "").strip() or DEFAULT_PROJECT_TYPE
+    if value not in PROJECT_TYPES:
+        raise WorkspaceError(f"Unknown project type: {value!r}.")
+    return value
+
+
+def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], str]:
+    """Returns (title, description, tech_stack, project_type). Raises
+    WorkspaceError on the first problem found."""
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
 
@@ -164,5 +202,6 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
     if len(description) > DESCRIPTION_MAX_CHARS:
         raise WorkspaceError(f"Project description is too long (max {DESCRIPTION_MAX_CHARS} characters).")
 
-    tech_stack = validate_tech_stack(data.get("tech_stack") or {})
-    return title, description, tech_stack
+    project_type = validate_project_type(data.get("project_type"))
+    tech_stack = validate_tech_stack(data.get("tech_stack") or {}, require_full=(project_type == "api_request"))
+    return title, description, tech_stack, project_type

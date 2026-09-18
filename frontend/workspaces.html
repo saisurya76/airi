@@ -176,6 +176,22 @@
   .required-mark { color: var(--exceeded); }
   .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 
+  .type-badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10.5px;
+    font-weight: 700; letter-spacing: 0.02em; margin-left: 8px; vertical-align: middle;
+  }
+  .type-api_request { background: rgba(110,168,254,0.15); color: var(--accent); }
+  .type-license_request { background: rgba(62,207,142,0.15); color: var(--safe); }
+  .type-sdlc_request { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .project-type-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 2px; }
+  .project-type-row label {
+    display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    color: var(--muted); background: #0f1115; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; flex: 1 1 150px;
+  }
+  .project-type-row input[type="radio"] { margin: 0; }
+  .project-type-row label.checked { border-color: var(--accent); color: var(--text); }
+
   .proj-tabs { display: flex; gap: 4px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px; margin-bottom: 14px; }
   .proj-tab-btn { margin: 0; background: transparent; color: var(--muted); border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .proj-tab-btn.active { background: var(--accent); color: #0f1115; }
@@ -409,6 +425,10 @@
           <div id="newProjectSection">
             <h3 style="margin-top:20px;">New project</h3>
             <div class="field">
+              <label>Project type <span class="required-mark">*</span></label>
+              <div class="project-type-row" id="newProjTypeRow"></div>
+            </div>
+            <div class="field">
               <label for="newProjTitle">Title <span class="required-mark">*</span></label>
               <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
             </div>
@@ -417,16 +437,20 @@
               <textarea id="newProjDescription"></textarea>
             </div>
             <div id="newProjTechStack" class="tech-grid"></div>
+            <div id="newProjWizardNote" class="tab-note hidden"></div>
             <div class="row"><div><button type="button" id="createProjectBtn">Add project</button></div></div>
             <div id="createProjectError" class="error hidden"></div>
 
             <div class="tab-note">
-              Open a project below to run AIRI's Standard, Exact, Traffic projection, and Load-test
-              report tools inside it — every run is saved to that project's history, and every saved
-              run (and each project's consolidated findings) is downloadable as its own PDF. Each
-              project also gets a Dashboard (charts across all saved runs) and a Notes tab (a
-              timestamped comment history). Once this workspace has 2+ projects, a "Project comparison"
-              section appears above, comparing them side by side with its own downloadable report.
+              An <b>API request</b> project runs AIRI's Standard, Exact, Traffic projection, and
+              Load-test report tools inside it — every run is saved to that project's history, and
+              every saved run (and each project's consolidated findings) is downloadable as its own
+              PDF; it also gets a Dashboard (charts across all saved runs). A <b>License request</b> or
+              <b>SDLC tool request</b> project is for organizing that request and its notes — build
+              and price the request itself in the dedicated wizard. Every project gets a Notes tab (a
+              timestamped comment history). Once this workspace has 2+ API request projects, a
+              "Project comparison" section appears above, comparing them side by side with its own
+              downloadable report.
             </div>
           </div>
           <div id="memberProjectNote" class="tab-note hidden">
@@ -492,6 +516,12 @@
   let workspaces = [];
   let currentWorkspace = null; // full detail object, or null when on the list view
   let techStackCategories = {};
+  let projectTypes = {};
+  const PROJECT_TYPE_FALLBACK_ORDER = ["api_request", "license_request", "sdlc_request"];
+  const WIZARD_LINKS = {
+    license_request: { href: "license-wizard.html", label: "License request wizard" },
+    sdlc_request: { href: "sdlc-wizard.html", label: "SDLC tool request wizard" },
+  };
   let modelsData = [];
   let testMode = null; // null = not loaded yet; true/false once GET /config resolves
 
@@ -1134,8 +1164,73 @@
     return result;
   }
 
+  function projectTypeOrder() {
+    const keys = Object.keys(projectTypes);
+    return keys.length ? keys : PROJECT_TYPE_FALLBACK_ORDER;
+  }
+
+  function projectTypeLabel(type) {
+    const meta = projectTypes[type];
+    if (meta) return meta.label;
+    // Fallback labels if /projects/project-types hasn't loaded yet.
+    return { api_request: "API request", license_request: "License request", sdlc_request: "SDLC tool request" }[type] || type;
+  }
+
+  function projectTypeRadiosHtml(idPrefix, selected, disabled) {
+    selected = selected || "api_request";
+    return projectTypeOrder().map((type) => `
+      <label class="${type === selected ? "checked" : ""}">
+        <input type="radio" name="${idPrefix}-type" value="${type}" data-project-type-radio${type === selected ? " checked" : ""}${disabled ? " disabled" : ""} />
+        ${escapeHtml(projectTypeLabel(type))}
+      </label>
+    `).join("");
+  }
+
+  function readProjectType(idPrefix) {
+    const checked = document.querySelector(`input[name="${idPrefix}-type"]:checked`);
+    return checked ? checked.value : "api_request";
+  }
+
+  function wizardNoteHtml(type) {
+    const link = WIZARD_LINKS[type];
+    if (!link) return "";
+    return `This project tracks a <b>${escapeHtml(projectTypeLabel(type))}</b> — build and price it in the
+      dedicated wizard, then use the Notes tab here to record the outcome.
+      <a href="${link.href}" target="_blank" rel="noopener">Open the ${escapeHtml(link.label)} →</a>`;
+  }
+
+  // Wires a project-type radio row so picking a type toggles that same
+  // form's tech-stack grid (only "API request" needs it) and, for the
+  // two newer types, shows the wizard note. Shared by the "New project"
+  // form and each project's "Details" edit form.
+  function wireProjectTypeRow(rowEl, techStackEl, wizardNoteEl) {
+    const applyForType = (type) => {
+      rowEl.querySelectorAll("label").forEach((label) => {
+        const input = label.querySelector("input[data-project-type-radio]");
+        label.classList.toggle("checked", !!input && input.value === type);
+      });
+      if (techStackEl) techStackEl.classList.toggle("hidden", type !== "api_request");
+      if (wizardNoteEl) {
+        const note = wizardNoteHtml(type);
+        wizardNoteEl.innerHTML = note;
+        wizardNoteEl.classList.toggle("hidden", !note);
+      }
+    };
+    rowEl.querySelectorAll("input[data-project-type-radio]").forEach((input) => {
+      input.addEventListener("change", () => applyForType(input.value));
+    });
+    const initiallyChecked = rowEl.querySelector("input[data-project-type-radio]:checked");
+    applyForType(initiallyChecked ? initiallyChecked.value : "api_request");
+  }
+
   function renderNewProjectForm() {
     newProjTechStack.innerHTML = techStackFieldsHtml("new-proj", {});
+    document.getElementById("newProjTypeRow").innerHTML = projectTypeRadiosHtml("new-proj", "api_request");
+    wireProjectTypeRow(
+      document.getElementById("newProjTypeRow"),
+      newProjTechStack,
+      document.getElementById("newProjWizardNote")
+    );
   }
 
   function stackSummary(techStack) {
@@ -1151,13 +1246,16 @@
     const isAdmin = currentWorkspace.role === "admin";
     projectsEmptyState.classList.toggle("hidden", projects.length > 0);
     for (const p of projects) {
+      const projectType = p.project_type || "api_request";
+      const isApiProject = projectType === "api_request";
       const row = document.createElement("div");
       row.className = "project-row";
+      const chip = stackSummary(p.tech_stack);
       row.innerHTML = `
         <div class="project-summary">
           <div>
-            <b>${escapeHtml(p.title)}</b>
-            <div class="stack-chip">${escapeHtml(stackSummary(p.tech_stack))}</div>
+            <b>${escapeHtml(p.title)}</b><span class="type-badge type-${projectType}">${escapeHtml(projectTypeLabel(projectType))}</span>
+            ${chip ? `<div class="stack-chip">${escapeHtml(chip)}</div>` : ""}
           </div>
           <span class="link-btn">Edit ▾</span>
         </div>
@@ -1165,18 +1263,42 @@
       const body = document.createElement("div");
       body.className = "project-body hidden";
       const idPrefix = `proj-${p.id}`;
-      body.innerHTML = `
-        <div class="proj-tabs">
-          <button type="button" class="proj-tab-btn active" data-tab="details">Details</button>
+      // The 4 API-traffic tools (+ their Dashboard rollup) only apply to
+      // an "api_request" project — the other two types get a single
+      // "Wizard" tab pointing at the dedicated wizard page instead.
+      const toolTabsHtml = isApiProject ? `
           <button type="button" class="proj-tab-btn" data-tab="analyze">Standard</button>
           <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
           <button type="button" class="proj-tab-btn" data-tab="project">Traffic</button>
           <button type="button" class="proj-tab-btn" data-tab="report">Load Test</button>
           <button type="button" class="proj-tab-btn" data-tab="dashboard">Dashboard</button>
+        ` : `
+          <button type="button" class="proj-tab-btn" data-tab="wizard">Wizard</button>
+        `;
+      const toolPanelsHtml = isApiProject ? `
+        <div class="proj-tab-panel hidden" data-panel="analyze"></div>
+        <div class="proj-tab-panel hidden" data-panel="exact"></div>
+        <div class="proj-tab-panel hidden" data-panel="project"></div>
+        <div class="proj-tab-panel hidden" data-panel="report"></div>
+        <div class="proj-tab-panel hidden" data-panel="dashboard"></div>
+        ` : `
+        <div class="proj-tab-panel hidden" data-panel="wizard">
+          <div class="tab-note">${wizardNoteHtml(projectType)}</div>
+        </div>
+        `;
+      body.innerHTML = `
+        <div class="proj-tabs">
+          <button type="button" class="proj-tab-btn active" data-tab="details">Details</button>
+          ${toolTabsHtml}
           <button type="button" class="proj-tab-btn" data-tab="notes">Notes</button>
           <button type="button" class="proj-tab-btn" data-tab="actions">Actions</button>
         </div>
         <div class="proj-tab-panel" data-panel="details">
+          <div class="field">
+            <label>Project type <span class="required-mark">*</span></label>
+            <div class="project-type-row" id="${idPrefix}-type-row"></div>
+            ${!isApiProject ? `<div class="tab-note" style="margin-top:10px;">Switching back to <b>API request</b> will show the tech-stack fields below and the Standard/Exact/Traffic/Load-test tabs again — nothing already saved is deleted.</div>` : ""}
+          </div>
           <div class="field">
             <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
             <input id="${idPrefix}-title" value="${escapeHtml(p.title)}"${isAdmin ? "" : " disabled"} />
@@ -1194,11 +1316,7 @@
           <div class="error hidden save-project-error"></div>
           ` : `<p class="sub" style="margin-top:10px;">Only the workspace admin can edit or delete this project.</p>`}
         </div>
-        <div class="proj-tab-panel hidden" data-panel="analyze"></div>
-        <div class="proj-tab-panel hidden" data-panel="exact"></div>
-        <div class="proj-tab-panel hidden" data-panel="project"></div>
-        <div class="proj-tab-panel hidden" data-panel="report"></div>
-        <div class="proj-tab-panel hidden" data-panel="dashboard"></div>
+        ${toolPanelsHtml}
         <div class="proj-tab-panel hidden" data-panel="notes"></div>
         <div class="proj-tab-panel hidden" data-panel="actions"></div>
       `;
@@ -1209,6 +1327,12 @@
       projectsList.appendChild(row);
 
       document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack, !isAdmin);
+      document.getElementById(`${idPrefix}-type-row`).innerHTML = projectTypeRadiosHtml(idPrefix, projectType, !isAdmin);
+      wireProjectTypeRow(
+        document.getElementById(`${idPrefix}-type-row`),
+        document.getElementById(`${idPrefix}-stack`),
+        null
+      );
 
       if (isAdmin) {
         const saveErrorEl = body.querySelector(".save-project-error");
@@ -1218,6 +1342,7 @@
             title: document.getElementById(`${idPrefix}-title`).value.trim(),
             description: document.getElementById(`${idPrefix}-description`).value.trim(),
             tech_stack: readTechStackFields(idPrefix),
+            project_type: readProjectType(idPrefix),
           };
           try {
             const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -1249,7 +1374,7 @@
           const tab = btn.dataset.tab;
           body.querySelectorAll(".proj-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
           body.querySelectorAll(".proj-tab-panel").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.panel !== tab));
-          if (tab !== "details") {
+          if (tab !== "details" && tab !== "wizard") {
             const panel = body.querySelector(`.proj-tab-panel[data-panel="${tab}"]`);
             if (!panel.dataset.rendered) {
               panel.dataset.rendered = "1";
@@ -1273,6 +1398,7 @@
       title: document.getElementById("newProjTitle").value.trim(),
       description: document.getElementById("newProjDescription").value.trim(),
       tech_stack: readTechStackFields("new-proj"),
+      project_type: readProjectType("new-proj"),
     };
     try {
       const project = await apiFetch(`/workspaces/${currentWorkspace.id}/projects`, { method: "POST", body: JSON.stringify(payload) });
@@ -1713,8 +1839,13 @@
   const comparisonContent = document.getElementById("comparisonContent");
 
   async function renderComparisonPanel() {
-    const projects = (currentWorkspace && currentWorkspace.projects) || [];
-    if (projects.length < 2) {
+    // Only "API request" projects are compared server-side (see
+    // _build_workspace_comparison) — a License/SDLC request project has
+    // none of the 4 tools' saved runs this rolls up, so it wouldn't add
+    // a real comparison point.
+    const allProjects = (currentWorkspace && currentWorkspace.projects) || [];
+    const apiProjects = allProjects.filter((p) => (p.project_type || "api_request") === "api_request");
+    if (apiProjects.length < 2) {
       comparisonPanel.classList.add("hidden");
       return;
     }
@@ -1961,6 +2092,7 @@
     document.getElementById("authEmailLabel").textContent = `Signed in as ${authEmail}`;
 
     techStackCategories = await apiFetch("/projects/tech-stack-categories").catch(() => ({}));
+    projectTypes = await apiFetch("/projects/project-types").catch(() => ({}));
     renderNewProjectForm();
 
     const profile = await apiFetch("/profile").catch(() => ({ has_app_key: false }));

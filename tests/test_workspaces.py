@@ -163,12 +163,13 @@ def test_validate_tech_stack_rejects_non_string_value():
 # ---------- project fields ----------
 
 def test_validate_project_fields_happy_path():
-    title, desc, tech_stack = ws.validate_project_fields(
+    title, desc, tech_stack, project_type = ws.validate_project_fields(
         {"title": " My Project ", "description": " d ", "tech_stack": _valid_tech_stack()}
     )
     assert title == "My Project"
     assert desc == "d"
     assert tech_stack["ai_model"] == "claude-3-5-sonnet"
+    assert project_type == "api_request"  # default, since none was given
     print("OK: validate_project_fields_happy_path")
 
 
@@ -192,12 +193,58 @@ def test_validate_project_fields_propagates_tech_stack_errors():
 
 def test_validate_project_fields_defaults_tech_stack_to_empty_dict():
     # tech_stack omitted entirely -> same as {} -> still enforces required categories
+    # for the default project type (api_request)
     try:
         ws.validate_project_fields({"title": "ok"})
         assert False, "should have raised"
     except ws.WorkspaceError:
         pass
     print("OK: validate_project_fields_defaults_tech_stack_to_empty_dict")
+
+
+# ---------- project type ----------
+
+def test_validate_project_type_defaults_to_api_request():
+    assert ws.validate_project_type(None) == "api_request"
+    assert ws.validate_project_type("") == "api_request"
+    assert ws.validate_project_type("   ") == "api_request"
+    print("OK: validate_project_type_defaults_to_api_request")
+
+
+def test_validate_project_type_accepts_all_known_types():
+    for key in ws.PROJECT_TYPES:
+        assert ws.validate_project_type(key) == key
+    assert set(ws.PROJECT_TYPES.keys()) == {"api_request", "license_request", "sdlc_request"}
+    print("OK: validate_project_type_accepts_all_known_types")
+
+
+def test_validate_project_type_rejects_unknown_value():
+    try:
+        ws.validate_project_type("something_else")
+        assert False, "should have raised"
+    except ws.WorkspaceError as e:
+        assert "unknown project type" in str(e).lower()
+    print("OK: validate_project_type_rejects_unknown_value")
+
+
+def test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack():
+    for project_type in ("license_request", "sdlc_request"):
+        title, desc, tech_stack, returned_type = ws.validate_project_fields(
+            {"title": "ok", "project_type": project_type}  # no tech_stack at all
+        )
+        assert returned_type == project_type
+        assert tech_stack["ai_services"] == ""  # not required, and not supplied
+        assert tech_stack["ai_model"] == ""
+    print("OK: validate_project_fields_license_and_sdlc_types_dont_require_tech_stack")
+
+
+def test_validate_project_fields_propagates_unknown_project_type():
+    try:
+        ws.validate_project_fields({"title": "ok", "project_type": "bogus"})
+        assert False, "should have raised"
+    except ws.WorkspaceError as e:
+        assert "unknown project type" in str(e).lower()
+    print("OK: validate_project_fields_propagates_unknown_project_type")
 
 
 if __name__ == "__main__":
@@ -220,4 +267,9 @@ if __name__ == "__main__":
     test_validate_project_fields_requires_title()
     test_validate_project_fields_propagates_tech_stack_errors()
     test_validate_project_fields_defaults_tech_stack_to_empty_dict()
+    test_validate_project_type_defaults_to_api_request()
+    test_validate_project_type_accepts_all_known_types()
+    test_validate_project_type_rejects_unknown_value()
+    test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack()
+    test_validate_project_fields_propagates_unknown_project_type()
     print("\nAll workspaces sanity checks passed.")
