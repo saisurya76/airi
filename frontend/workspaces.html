@@ -1420,6 +1420,19 @@
   }
 
   function renderAnalyzeResult(r) {
+    const usedCache = (r.cache_write_tokens || 0) > 0 || (r.cache_read_tokens || 0) > 0;
+    const cacheBlock = usedCache ? `
+      <div style="margin-top:10px;">
+        <div class="label">Cache breakdown</div>
+        <div class="result-grid" style="margin-top:6px;">
+          <div class="stat"><div class="label">Fresh input cost</div><div class="value">$${(r.fresh_input_cost || 0).toFixed(4)}</div></div>
+          <div class="stat"><div class="label">Cache write cost</div><div class="value">$${(r.cache_write_cost || 0).toFixed(4)}</div></div>
+          <div class="stat"><div class="label">Cache read cost</div><div class="value">$${(r.cache_read_cost || 0).toFixed(4)}</div></div>
+          <div class="stat"><div class="label">Cache savings</div><div class="value">${(r.cache_savings || 0) < 0 ? "−" : ""}$${Math.abs(r.cache_savings || 0).toFixed(4)}</div></div>
+        </div>
+        ${r.cache_pricing_known === false ? `<div class="tab-note">"${escapeHtml(r.model)}" has no published cache price in AIRI's registry — cache tokens above were billed at the plain input rate, not a discount.</div>` : ""}
+      </div>
+    ` : "";
     return `
       <div class="result-grid">
         <div class="stat"><div class="label">Input tokens</div><div class="value">${r.input_tokens.toLocaleString()}</div></div>
@@ -1431,6 +1444,7 @@
         ${statusBadgeHtml(r.status)}
         <span class="stack-chip">${(r.context_utilization * 100).toFixed(1)}% of ${r.context_window.toLocaleString()} ctx · ${escapeHtml(r.method)}${r.known_model ? "" : " · unknown model, heuristic pricing"}</span>
       </div>
+      ${cacheBlock}
       ${r.exact_mode_note ? `<div class="tab-note">${escapeHtml(r.exact_mode_note)}</div>` : ""}
     `;
   }
@@ -1554,7 +1568,7 @@
   }
 
   function addArchetypeRow(container, n) {
-    addDynamicRow(container, `
+    const rowEl = addDynamicRow(container, `
       <div class="row">
         <div><label>Name</label><input class="arch-name" value="Archetype ${n}" /></div>
         <div><label>Volume</label><input class="arch-volume" type="number" min="0" value="1000" /></div>
@@ -1564,8 +1578,21 @@
         <div><label>Model</label><select class="arch-model">${modelOptionsHtml("gpt-4o")}</select></div>
         <div><label>Expected output tokens</label><input class="arch-output" type="number" min="0" value="200" /></div>
       </div>
+      <button type="button" class="link-btn cache-toggle-btn" style="margin-top:4px;">+ Using prompt caching? Add cache token counts</button>
+      <div class="row cache-row hidden" style="margin-top:8px;">
+        <div><label>Cache-write tokens (optional)</label><input class="arch-cache-write" type="number" min="0" value="0" /></div>
+        <div><label>Cache-read tokens (optional)</label><input class="arch-cache-read" type="number" min="0" value="0" /></div>
+      </div>
       <button type="button" class="danger-btn remove-row-btn">Remove</button>
     `);
+    rowEl.querySelector(".cache-toggle-btn").addEventListener("click", (e) => {
+      const row = rowEl.querySelector(".cache-row");
+      const showing = !row.classList.contains("hidden");
+      row.classList.toggle("hidden", showing);
+      e.target.textContent = showing
+        ? "+ Using prompt caching? Add cache token counts"
+        : "− Hide cache token counts";
+    });
   }
 
   function addRecordRow(container, n) {
@@ -1925,6 +1952,11 @@
           <div><label for="${idPrefix}-model">Model</label><select id="${idPrefix}-model">${modelOptionsHtml("gpt-4o")}</select></div>
           <div><label for="${idPrefix}-output">Expected output tokens</label><input id="${idPrefix}-output" type="number" min="0" value="200" /></div>
         </div>
+        <button type="button" class="link-btn cache-toggle-btn" style="margin-top:4px;">+ Using prompt caching? Add cache token counts</button>
+        <div class="row cache-row hidden" style="margin-top:8px;">
+          <div><label for="${idPrefix}-cache-write">Cache-write tokens (optional)</label><input id="${idPrefix}-cache-write" type="number" min="0" value="0" /></div>
+          <div><label for="${idPrefix}-cache-read">Cache-read tokens (optional)</label><input id="${idPrefix}-cache-read" type="number" min="0" value="0" /></div>
+        </div>
         ${byokNote}
         <div class="field"><label for="${idPrefix}-label">Label (optional)</label><input id="${idPrefix}-label" placeholder="e.g. Baseline check" /></div>
         <div class="row"><div><button type="button" id="${idPrefix}-run-btn" style="width:100%;">Run ${tool === "exact" ? "Exact" : "Standard"}</button></div></div>
@@ -1933,6 +1965,14 @@
         <h3 style="margin-top:18px;">Run history</h3>
         <div id="${idPrefix}-history"></div>
       `;
+      panelEl.querySelector(".cache-toggle-btn").addEventListener("click", (e) => {
+        const row = panelEl.querySelector(".cache-row");
+        const showing = !row.classList.contains("hidden");
+        row.classList.toggle("hidden", showing);
+        e.target.textContent = showing
+          ? "+ Using prompt caching? Add cache token counts"
+          : "− Hide cache token counts";
+      });
       document.getElementById(`${idPrefix}-run-btn`).addEventListener("click", async () => {
         const errorEl = document.getElementById(`${idPrefix}-error`);
         errorEl.classList.add("hidden");
@@ -1942,6 +1982,8 @@
           prompt,
           model: document.getElementById(`${idPrefix}-model`).value,
           expected_output_tokens: parseInt(document.getElementById(`${idPrefix}-output`).value || "0", 10),
+          cache_write_tokens: parseInt(document.getElementById(`${idPrefix}-cache-write`).value || "0", 10),
+          cache_read_tokens: parseInt(document.getElementById(`${idPrefix}-cache-read`).value || "0", 10),
           label: document.getElementById(`${idPrefix}-label`).value.trim(),
         };
         if (tool === "exact") {
@@ -1992,6 +2034,8 @@
           prompt: row.querySelector(".arch-prompt").value.trim(),
           model: row.querySelector(".arch-model").value,
           expected_output_tokens: parseInt(row.querySelector(".arch-output").value || "0", 10),
+          cache_write_tokens: parseInt(row.querySelector(".arch-cache-write").value || "0", 10),
+          cache_read_tokens: parseInt(row.querySelector(".arch-cache-read").value || "0", 10),
         }));
         if (!archetypes.length) { errorEl.textContent = "Add at least one archetype."; errorEl.classList.remove("hidden"); return; }
         const payload = { archetypes, label: document.getElementById(`${idPrefix}-label`).value.trim() };

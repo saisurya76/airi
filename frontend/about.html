@@ -132,6 +132,15 @@
         <li>OpenAI models are counted exactly via <code>tiktoken</code>; everything else uses a
         fast, honest character-based heuristic by default — see "Exact mode" below for real
         Claude/Gemini counts.</li>
+        <li>If your app uses prompt caching (Anthropic prompt caching, OpenAI's automatic
+        caching, Gemini context caching), click <b>"+ Using prompt caching?"</b> under
+        Model/Expected output tokens and say how many of this request's tokens are a fresh
+        cache write vs. an existing cache read. The cost breaks out fresh/write/read/output
+        separately, plus a "cache savings" number — positive means caching saved money on this
+        request, negative is normal on a write-only request (the saving shows up on later reads
+        of that entry, not the request that created it). AIRI doesn't detect caching for you —
+        it only prices it once you say how many tokens were involved, and a model with no
+        published cache price is billed at the plain input rate, never guessed.</li>
       </ol>
     </div>
 
@@ -174,6 +183,9 @@
         projections — AIRI doesn't guess volume).</li>
         <li>Click <b>Run projection</b> to get a per-row and grand-total token/cost breakdown,
         plus a per-model summary.</li>
+        <li>Each row can also take cache-write/cache-read token counts, same as a single request
+        — useful since a repeated archetype (the same call-site run many times) is exactly where
+        caching a fixed system prompt or history prefix pays off most.</li>
       </ol>
     </div>
 

@@ -108,6 +108,14 @@
       piece does, and the <a href="developers.html">Developers page</a> for the full API
       reference every step below links back to.
     </p>
+    <p class="sub">
+      Every <code>estimated_cost</code> below is cache-aware: pass <code>cache_write_tokens</code>/
+      <code>cache_read_tokens</code> on any <code>/analyze</code>, <code>/analyze/exact</code> or
+      <code>/project</code> call and the response breaks the cost out into fresh input, cache
+      write, cache read and output separately, plus what caching saved. Leave them out (the
+      default) and nothing here changes — see step 1 of <a href="about.html">What is AIRI?</a>
+      for the full explanation, and scenario 1 below for where it matters most.
+    </p>
 
     <h2><span class="type-num">1</span>Customer support / AI helpdesk chatbot</h2>
     <div class="panel">
@@ -125,6 +133,12 @@
         "technical") as it happens through the day.</li>
         <li>At shift end, POST the collected records to <code>/report</code> (or
         <code>/report/pdf</code> for a shareable summary) for a per-queue breakdown.</li>
+        <li>This is the clearest case for caching: the system prompt and growing conversation
+        history get resent on every turn. If your provider/SDK caches that stable prefix, pass
+        the cached token count as <code>cache_write_tokens</code> on the turn that writes it and
+        <code>cache_read_tokens</code> on every turn that reuses it — <code>estimated_cost</code>
+        then reflects what the conversation actually costs turn-over-turn, not the plain-input
+        price on every message.</li>
       </ol>
       <h3>What to measure</h3>
       <ul>
@@ -134,6 +148,9 @@
         trend toward zero once trimming logic is in place.</li>
         <li><code>avg_tokens_per_request</code> over time, per queue — catches a macro or
         canned-response template that's silently bloating prompts.</li>
+        <li>If caching is wired in, sum each turn's <code>cache_savings</code> — positive turns
+        (cache reads) should outweigh the negative one that wrote the cache, over a full
+        conversation.</li>
       </ul>
     </div>
 

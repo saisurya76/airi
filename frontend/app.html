@@ -373,6 +373,25 @@
         </div>
       </div>
 
+      <button type="button" id="cacheToggleBtn" class="link-btn" style="margin-top:12px;">+ Using prompt caching? Add cache token counts</button>
+      <div id="cachePanel" class="hidden" style="margin-top:8px;">
+        <div class="row">
+          <div>
+            <label for="cacheWriteTokens">Cache-write tokens (optional)</label>
+            <input id="cacheWriteTokens" type="number" min="0" value="0" />
+          </div>
+          <div>
+            <label for="cacheReadTokens">Cache-read tokens (optional)</label>
+            <input id="cacheReadTokens" type="number" min="0" value="0" />
+          </div>
+        </div>
+        <p class="meta" style="margin-top:6px;">
+          How many of this request's input tokens are newly written into a prompt cache
+          vs. read back from one you already wrote — AIRI doesn't detect caching for you,
+          it only prices it once you say how many tokens were involved.
+        </p>
+      </div>
+
       <button id="analyzeBtn">Analyze request</button>
       <div id="error" class="error hidden"></div>
     </div>
@@ -412,6 +431,30 @@
         <div class="bar-track"><div class="bar-fill" id="contextBar"></div></div>
         <div class="meta" id="contextMeta"></div>
       </div>
+
+      <div id="cacheBreakdown" class="hidden" style="margin-top:14px;">
+        <div class="label">Cache breakdown</div>
+        <div class="result-grid" style="margin-top:6px;">
+          <div class="stat">
+            <div class="label">Fresh input cost</div>
+            <div class="value" id="freshInputCost">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Cache write cost</div>
+            <div class="value" id="cacheWriteCostVal">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Cache read cost</div>
+            <div class="value" id="cacheReadCostVal">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Cache savings</div>
+            <div class="value" id="cacheSavingsVal">—</div>
+          </div>
+        </div>
+        <div class="meta" id="cachePricingNote"></div>
+      </div>
+
       <div id="exactNote" class="exact-note hidden"></div>
     </div>
 
@@ -541,6 +584,16 @@
   const analyzeBtn = document.getElementById("analyzeBtn");
   const errorEl = document.getElementById("error");
   const resultPanel = document.getElementById("resultPanel");
+  const cacheToggleBtn = document.getElementById("cacheToggleBtn");
+  const cachePanel = document.getElementById("cachePanel");
+
+  cacheToggleBtn.addEventListener("click", () => {
+    const showing = !cachePanel.classList.contains("hidden");
+    cachePanel.classList.toggle("hidden", showing);
+    cacheToggleBtn.textContent = showing
+      ? "+ Using prompt caching? Add cache token counts"
+      : "− Hide cache token counts";
+  });
 
   let modelsData = [];
 
@@ -585,6 +638,8 @@
     const prompt = document.getElementById("prompt").value.trim();
     const model = modelSelect.value;
     const expected_output_tokens = parseInt(document.getElementById("outputTokens").value || "0", 10);
+    const cache_write_tokens = parseInt(document.getElementById("cacheWriteTokens").value || "0", 10);
+    const cache_read_tokens = parseInt(document.getElementById("cacheReadTokens").value || "0", 10);
 
     errorEl.classList.add("hidden");
     resultPanel.classList.add("hidden");
@@ -603,7 +658,7 @@
     const headers = { "Content-Type": "application/json" };
     if (useExact) headers["Authorization"] = `Bearer ${authToken}`;
 
-    const requestBody = { prompt, model, expected_output_tokens };
+    const requestBody = { prompt, model, expected_output_tokens, cache_write_tokens, cache_read_tokens };
     if (useExact && testMode === false) {
       // BYOK mode: attach whichever keys are saved in this browser. The
       // server only uses the one matching the model's provider (or
@@ -666,6 +721,25 @@
       exactNote.classList.remove("hidden");
     } else {
       exactNote.classList.add("hidden");
+    }
+
+    const cacheBreakdown = document.getElementById("cacheBreakdown");
+    if ((r.cache_write_tokens || 0) > 0 || (r.cache_read_tokens || 0) > 0) {
+      document.getElementById("freshInputCost").textContent = fmtMoney(r.fresh_input_cost || 0);
+      document.getElementById("cacheWriteCostVal").textContent = fmtMoney(r.cache_write_cost || 0);
+      document.getElementById("cacheReadCostVal").textContent = fmtMoney(r.cache_read_cost || 0);
+      const savings = r.cache_savings || 0;
+      document.getElementById("cacheSavingsVal").textContent = (savings >= 0 ? "" : "−") + fmtMoney(Math.abs(savings));
+      const noteEl = document.getElementById("cachePricingNote");
+      if (r.cache_pricing_known === false) {
+        noteEl.textContent = `"${r.model}" has no published cache price in AIRI's registry — cache tokens above were billed at the plain input rate, not a discount.`;
+        noteEl.classList.remove("hidden");
+      } else {
+        noteEl.textContent = "";
+      }
+      cacheBreakdown.classList.remove("hidden");
+    } else {
+      cacheBreakdown.classList.add("hidden");
     }
 
     resultPanel.classList.remove("hidden");
@@ -1030,6 +1104,17 @@
           <input type="number" class="archetype-output" min="0" value="${prefill.expected_output_tokens != null ? prefill.expected_output_tokens : 200}" />
         </div>
       </div>
+      <button type="button" class="link-btn archetype-cache-toggle" style="margin-top:10px;">+ Using prompt caching? Add cache token counts</button>
+      <div class="row archetype-cache-row hidden" style="margin-top:8px;">
+        <div>
+          <label>Cache-write tokens (optional)</label>
+          <input type="number" class="archetype-cache-write" min="0" value="${prefill.cache_write_tokens || 0}" />
+        </div>
+        <div>
+          <label>Cache-read tokens (optional)</label>
+          <input type="number" class="archetype-cache-read" min="0" value="${prefill.cache_read_tokens || 0}" />
+        </div>
+      </div>
     `;
     archetypeList.appendChild(card);
   }
@@ -1037,18 +1122,32 @@
   archetypeList.addEventListener("click", (e) => {
     if (e.target.matches("[data-remove]")) {
       e.target.closest(".archetype-card").remove();
+    } else if (e.target.matches(".archetype-cache-toggle")) {
+      const row = e.target.closest(".archetype-card").querySelector(".archetype-cache-row");
+      const showing = !row.classList.contains("hidden");
+      row.classList.toggle("hidden", showing);
+      e.target.textContent = showing
+        ? "+ Using prompt caching? Add cache token counts"
+        : "− Hide cache token counts";
     }
   });
 
   document.getElementById("addArchetypeBtn").addEventListener("click", () => addArchetypeRow());
 
   function collectArchetypes() {
-    return Array.from(document.querySelectorAll(".archetype-card")).map((card) => ({
+    // Scoped to archetypeList: the load-test section's service cards
+    // (see collectServices() below) reuse the same "archetype-card"
+    // class name for its own cards, so an unscoped document-wide query
+    // here would also match those and crash on the fields it's missing
+    // (a pre-existing bug, surfaced while adding cache-token fields).
+    return Array.from(archetypeList.querySelectorAll(".archetype-card")).map((card) => ({
       name: card.querySelector(".archetype-name").value.trim() || "Untitled",
       volume: parseInt(card.querySelector(".archetype-volume").value || "0", 10),
       prompt: card.querySelector(".archetype-prompt").value,
       model: card.querySelector(".archetype-model").value,
       expected_output_tokens: parseInt(card.querySelector(".archetype-output").value || "0", 10),
+      cache_write_tokens: parseInt(card.querySelector(".archetype-cache-write").value || "0", 10),
+      cache_read_tokens: parseInt(card.querySelector(".archetype-cache-read").value || "0", 10),
     }));
   }
 
