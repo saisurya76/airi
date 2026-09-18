@@ -105,7 +105,40 @@ def test_archetype_cache_tokens_default_to_zero():
     unit = r.archetypes[0].unit
     assert unit.cache_write_tokens == 0
     assert unit.cache_read_tokens == 0
+    assert r.archetypes[0].projected_cache_savings == 0.0
+    assert r.total_cache_savings == 0.0
     print("OK: archetype_cache_tokens_default_to_zero")
+
+
+def test_projected_cache_savings_scales_with_volume():
+    r = project(
+        [Archetype(
+            name="cached chat", volume=500, prompt="word " * 500, model="claude-3-5-sonnet",
+            expected_output_tokens=50, cache_read_tokens=300,
+        )]
+    )
+    unit = r.archetypes[0].unit
+    assert unit.cache_savings > 0  # a cache-read-only unit should show positive savings
+    expected = round(unit.cache_savings * 500, 6)
+    assert r.archetypes[0].projected_cache_savings == expected
+    assert r.total_cache_savings == expected
+    print("OK: projected_cache_savings_scales_with_volume ->", r.total_cache_savings)
+
+
+def test_total_cache_savings_sums_across_archetypes():
+    r = project(
+        [
+            Archetype(name="a", volume=100, prompt="word " * 300, model="claude-3-5-sonnet", cache_read_tokens=200),
+            Archetype(name="b", volume=50, prompt="word " * 300, model="claude-3-5-sonnet", cache_write_tokens=200),
+        ]
+    )
+    expected_total = round(sum(a.projected_cache_savings for a in r.archetypes), 6)
+    assert r.total_cache_savings == expected_total
+    # one archetype saves (cache read), the other costs extra (cache write only) —
+    # confirms the aggregate isn't just summing absolute values blindly.
+    assert r.archetypes[0].projected_cache_savings > 0
+    assert r.archetypes[1].projected_cache_savings < 0
+    print("OK: total_cache_savings_sums_across_archetypes ->", r.total_cache_savings)
 
 
 def test_any_exceeded_flag():
@@ -131,5 +164,7 @@ if __name__ == "__main__":
     test_unknown_model_still_projects()
     test_archetype_cache_tokens_flow_through_to_unit()
     test_archetype_cache_tokens_default_to_zero()
+    test_projected_cache_savings_scales_with_volume()
+    test_total_cache_savings_sums_across_archetypes()
     test_any_exceeded_flag()
     print("\nAll projector sanity checks passed.")

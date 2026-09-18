@@ -481,6 +481,8 @@ def models():
             "context_window": spec.context_window,
             "input_price_per_1m": spec.input_price_per_1m,
             "output_price_per_1m": spec.output_price_per_1m,
+            "cache_write_price_per_1m": spec.cache_write_price_per_1m,
+            "cache_read_price_per_1m": spec.cache_read_price_per_1m,
         }
         for model_id, spec in sorted(MODEL_REGISTRY.items())
     ]

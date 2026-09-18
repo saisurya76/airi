@@ -66,6 +66,10 @@ class ArchetypeProjection:
     projected_output_tokens: int
     projected_total_tokens: int
     projected_cost: float
+    # unit.cache_savings (see airi/pricing.py) scaled by volume, same as
+    # projected_cost is unit.estimated_cost scaled by volume. Zero when
+    # the archetype didn't set cache_write_tokens/cache_read_tokens.
+    projected_cache_savings: float = 0.0
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -82,6 +86,9 @@ class ProjectionResult:
     cost_by_model: dict
     tokens_by_model: dict
     any_exceeded: bool  # True if any single archetype's unit request already exceeds its context window
+    # Sum of every archetype's projected_cache_savings. Zero unless at
+    # least one archetype set cache_write_tokens/cache_read_tokens.
+    total_cache_savings: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -92,6 +99,7 @@ class ProjectionResult:
             "cost_by_model": self.cost_by_model,
             "tokens_by_model": self.tokens_by_model,
             "any_exceeded": self.any_exceeded,
+            "total_cache_savings": self.total_cache_savings,
         }
 
 
@@ -122,6 +130,7 @@ def project(archetypes: List[Union[Archetype, dict]]) -> ProjectionResult:
     total_cost = 0.0
     total_volume = 0
     any_exceeded = False
+    total_cache_savings = 0.0
 
     for raw in archetypes:
         a = raw if isinstance(raw, Archetype) else Archetype.from_dict(raw)
@@ -143,6 +152,7 @@ def project(archetypes: List[Union[Archetype, dict]]) -> ProjectionResult:
         projected_output = unit.estimated_output_tokens * a.volume
         projected_total = unit.estimated_total_tokens * a.volume
         projected_cost = round(unit.estimated_cost * a.volume, 6)
+        projected_cache_savings = round(unit.cache_savings * a.volume, 6)
 
         results.append(
             ArchetypeProjection(
@@ -154,12 +164,14 @@ def project(archetypes: List[Union[Archetype, dict]]) -> ProjectionResult:
                 projected_output_tokens=projected_output,
                 projected_total_tokens=projected_total,
                 projected_cost=projected_cost,
+                projected_cache_savings=projected_cache_savings,
             )
         )
 
         total_tokens += projected_total
         total_cost += projected_cost
         total_volume += a.volume
+        total_cache_savings += projected_cache_savings
         cost_by_model[a.model] = round(cost_by_model.get(a.model, 0.0) + projected_cost, 6)
         tokens_by_model[a.model] = tokens_by_model.get(a.model, 0) + projected_total
 
@@ -171,4 +183,5 @@ def project(archetypes: List[Union[Archetype, dict]]) -> ProjectionResult:
         cost_by_model=cost_by_model,
         tokens_by_model=tokens_by_model,
         any_exceeded=any_exceeded,
+        total_cache_savings=round(total_cache_savings, 6),
     )

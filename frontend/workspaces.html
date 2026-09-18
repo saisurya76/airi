@@ -1450,15 +1450,25 @@
   }
 
   function renderProjectResult(r) {
-    const rows = r.archetypes.map((a) => `
+    const rows = r.archetypes.map((a) => {
+      const usedCache = (a.unit && ((a.unit.cache_write_tokens || 0) > 0 || (a.unit.cache_read_tokens || 0) > 0));
+      return `
       <tr>
-        <td>${escapeHtml(a.name)}</td>
+        <td>${escapeHtml(a.name)}${usedCache ? ` <span class="stack-chip">cached</span>` : ""}</td>
         <td>${escapeHtml(a.model)}</td>
         <td>${a.volume.toLocaleString()}</td>
         <td>${a.projected_total_tokens.toLocaleString()}</td>
         <td>$${a.projected_cost.toFixed(4)}</td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
+    const totalCacheSavings = r.total_cache_savings || 0;
+    const cacheNote = totalCacheSavings !== 0
+      ? `<div class="tab-note">${totalCacheSavings > 0
+          ? `Caching saves an estimated $${totalCacheSavings.toFixed(4)} across this projection, vs. pricing every token fresh.`
+          : `Caching costs an estimated $${Math.abs(totalCacheSavings).toFixed(4)} extra across this projection (cache-write premiums not yet offset by reads).`
+        }</div>`
+      : "";
     return `
       <table class="tool-table">
         <thead><tr><th>Archetype</th><th>Model</th><th>Volume</th><th>Total tokens</th><th>Cost</th></tr></thead>
@@ -1466,6 +1476,7 @@
         <tfoot><tr><td colspan="3">Grand total</td><td>${r.total_tokens.toLocaleString()}</td><td>$${r.total_cost.toFixed(4)}</td></tr></tfoot>
       </table>
       ${r.any_exceeded ? `<div class="tab-note" style="color:var(--exceeded); border-color:rgba(242,85,90,0.3);">One or more archetypes already exceed their model's context window at a single-request level.</div>` : ""}
+      ${cacheNote}
     `;
   }
 
@@ -1596,7 +1607,7 @@
   }
 
   function addRecordRow(container, n) {
-    addDynamicRow(container, `
+    const rowEl = addDynamicRow(container, `
       <div class="row">
         <div><label>Label</label><input class="rec-label" value="Request ${n}" /></div>
         <div><label>Phase (optional)</label><input class="rec-phase" placeholder="e.g. normal / peak" /></div>
@@ -1606,8 +1617,21 @@
         <div><label>Model</label><select class="rec-model">${modelOptionsHtml("gpt-4o")}</select></div>
         <div><label>Expected output tokens</label><input class="rec-output" type="number" min="0" value="150" /></div>
       </div>
+      <button type="button" class="link-btn cache-toggle-btn" style="margin-top:4px;">+ Using prompt caching? Add cache token counts</button>
+      <div class="row cache-row hidden" style="margin-top:8px;">
+        <div><label>Cache-write tokens (optional)</label><input class="rec-cache-write" type="number" min="0" value="0" /></div>
+        <div><label>Cache-read tokens (optional)</label><input class="rec-cache-read" type="number" min="0" value="0" /></div>
+      </div>
       <button type="button" class="danger-btn remove-row-btn">Remove</button>
     `);
+    rowEl.querySelector(".cache-toggle-btn").addEventListener("click", (e) => {
+      const row = rowEl.querySelector(".cache-row");
+      const showing = !row.classList.contains("hidden");
+      row.classList.toggle("hidden", showing);
+      e.target.textContent = showing
+        ? "+ Using prompt caching? Add cache token counts"
+        : "− Hide cache token counts";
+    });
   }
 
   // ---------- Phase 3: Dashboard / Notes / Actions tabs ----------
@@ -2091,11 +2115,13 @@
           const prompt = row.querySelector(".rec-prompt").value.trim();
           const model = row.querySelector(".rec-model").value;
           const expected_output_tokens = parseInt(row.querySelector(".rec-output").value || "0", 10);
+          const cache_write_tokens = parseInt(row.querySelector(".rec-cache-write").value || "0", 10);
+          const cache_read_tokens = parseInt(row.querySelector(".rec-cache-read").value || "0", 10);
           if (!prompt) continue;
           const res = await fetch(`${API_BASE}/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt, model, expected_output_tokens }),
+            body: JSON.stringify({ prompt, model, expected_output_tokens, cache_write_tokens, cache_read_tokens }),
           });
           const analyzeResult = await res.json();
           if (!res.ok) throw new Error(analyzeResult.detail || "Could not analyze one of the requests.");

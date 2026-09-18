@@ -125,6 +125,26 @@ def test_missing_field_rejected():
         print("OK: missing_field_rejected ->", e)
 
 
+def test_cache_aware_records_aggregate_correctly():
+    # build_report() only ever reads estimated_cost (already cache-aware,
+    # see airi/pricing.py) off each record — a record with real
+    # cache_write_tokens/cache_read_tokens should roll up exactly like
+    # any other record, no special-casing needed here.
+    cached = analyze(prompt="word " * 200, model="claude-3-5-sonnet", expected_output_tokens=50,
+                      cache_read_tokens=100).to_dict()
+    cached["label"] = "cached-turn"
+    plain = analyze(prompt="word " * 200, model="claude-3-5-sonnet", expected_output_tokens=50).to_dict()
+    plain["label"] = "plain-turn"
+    report = build_report("Cache-aware run", [cached, plain])
+    assert report.total_requests == 2
+    assert abs(report.total_cost - round(cached["estimated_cost"] + plain["estimated_cost"], 6)) < 1e-6
+    # The cached-turn record retains its own cache breakdown in by_label's
+    # flagged/peak views even though build_report() never reads those
+    # fields directly — nothing strips them.
+    assert report.by_label["cached-turn"]["cost"] == cached["estimated_cost"]
+    print("OK: cache_aware_records_aggregate_correctly ->", report.total_cost)
+
+
 def test_too_many_records_rejected():
     try:
         build_report("Too many", [make_record("chat")] * (MAX_RECORDS + 1))
@@ -141,6 +161,7 @@ if __name__ == "__main__":
     test_throughput_from_timestamps()
     test_no_timestamps_omits_throughput()
     test_flagged_list_capped_and_sorted()
+    test_cache_aware_records_aggregate_correctly()
     test_empty_records_rejected()
     test_blank_run_name_rejected()
     test_missing_field_rejected()

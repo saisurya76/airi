@@ -500,6 +500,7 @@
         </table>
       </div>
       <div id="exceededNote" class="error hidden" style="margin-top:12px;"></div>
+      <div id="cacheSavingsNote" class="meta hidden" style="margin-top:10px;"></div>
       <div class="model-breakdown" id="modelBreakdown"></div>
     </div>
 
@@ -1194,9 +1195,11 @@
     rows.innerHTML = r.archetypes
       .map((a) => {
         const perReq = a.unit.estimated_total_tokens.toLocaleString();
+        const usedCache = (a.unit.cache_write_tokens || 0) > 0 || (a.unit.cache_read_tokens || 0) > 0;
+        const cacheTag = usedCache ? ` <span class="meta" style="display:inline;">(cached)</span>` : "";
         return `
           <tr>
-            <td>${a.name}</td>
+            <td>${a.name}${cacheTag}</td>
             <td>${a.model}</td>
             <td>${a.volume.toLocaleString()}</td>
             <td>${perReq}</td>
@@ -1216,6 +1219,17 @@
       exceededNote.classList.remove("hidden");
     } else {
       exceededNote.classList.add("hidden");
+    }
+
+    const cacheSavingsNote = document.getElementById("cacheSavingsNote");
+    const totalCacheSavings = r.total_cache_savings || 0;
+    if (totalCacheSavings !== 0) {
+      cacheSavingsNote.textContent = totalCacheSavings > 0
+        ? `Caching saves an estimated ${fmtMoney(totalCacheSavings)} across this projection, vs. pricing every token fresh.`
+        : `Caching costs an estimated ${fmtMoney(Math.abs(totalCacheSavings))} extra across this projection (cache-write premiums not yet offset by reads) — the payoff shows up as future reads of that cache accumulate.`;
+      cacheSavingsNote.classList.remove("hidden");
+    } else {
+      cacheSavingsNote.classList.add("hidden");
     }
 
     const breakdown = document.getElementById("modelBreakdown");
@@ -1281,6 +1295,17 @@
           <input type="number" class="service-peak-count" min="0" value="${prefill.peakCount != null ? prefill.peakCount : 15}" />
         </div>
       </div>
+      <button type="button" class="link-btn service-cache-toggle" style="margin-top:10px;">+ Using prompt caching? Add cache token counts</button>
+      <div class="row service-cache-row hidden" style="margin-top:8px;">
+        <div>
+          <label>Cache-write tokens (optional)</label>
+          <input type="number" class="service-cache-write" min="0" value="${prefill.cache_write_tokens || 0}" />
+        </div>
+        <div>
+          <label>Cache-read tokens (optional)</label>
+          <input type="number" class="service-cache-read" min="0" value="${prefill.cache_read_tokens || 0}" />
+        </div>
+      </div>
     `;
     serviceList.appendChild(card);
   }
@@ -1288,6 +1313,13 @@
   serviceList.addEventListener("click", (e) => {
     if (e.target.matches("[data-remove]")) {
       e.target.closest(".archetype-card").remove();
+    } else if (e.target.matches(".service-cache-toggle")) {
+      const row = e.target.closest(".archetype-card").querySelector(".service-cache-row");
+      const showing = !row.classList.contains("hidden");
+      row.classList.toggle("hidden", showing);
+      e.target.textContent = showing
+        ? "+ Using prompt caching? Add cache token counts"
+        : "− Hide cache token counts";
     }
   });
 
@@ -1302,14 +1334,16 @@
       peakMultiplier: Math.max(1, parseInt(card.querySelector(".service-peak-mult").value || "1", 10)),
       normalCount: Math.max(0, parseInt(card.querySelector(".service-normal-count").value || "0", 10)),
       peakCount: Math.max(0, parseInt(card.querySelector(".service-peak-count").value || "0", 10)),
+      cache_write_tokens: parseInt(card.querySelector(".service-cache-write").value || "0", 10),
+      cache_read_tokens: parseInt(card.querySelector(".service-cache-read").value || "0", 10),
     }));
   }
 
-  async function fetchAnalyze(prompt, model, expected_output_tokens) {
+  async function fetchAnalyze(prompt, model, expected_output_tokens, cache_write_tokens, cache_read_tokens) {
     const res = await fetch(`${API_BASE}/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model, expected_output_tokens }),
+      body: JSON.stringify({ prompt, model, expected_output_tokens, cache_write_tokens: cache_write_tokens || 0, cache_read_tokens: cache_read_tokens || 0 }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Request failed.");
@@ -1367,11 +1401,11 @@
         // that phase (same idea as "Traffic projection" above: AIRI checks
         // one request shape, your own harness supplies how many happened).
         // Peak load is simulated as a longer accumulated prompt/context.
-        const normalResult = await fetchAnalyze(svc.prompt, svc.model, svc.expected_output_tokens);
+        const normalResult = await fetchAnalyze(svc.prompt, svc.model, svc.expected_output_tokens, svc.cache_write_tokens, svc.cache_read_tokens);
         const peakPrompt = svc.peakMultiplier > 1
           ? Array(svc.peakMultiplier).fill(svc.prompt).join("\n\n")
           : svc.prompt;
-        const peakResult = await fetchAnalyze(peakPrompt, svc.model, svc.expected_output_tokens);
+        const peakResult = await fetchAnalyze(peakPrompt, svc.model, svc.expected_output_tokens, svc.cache_write_tokens, svc.cache_read_tokens);
 
         for (let i = 0; i < svc.normalCount; i++) {
           records.push(tagRecord(normalResult, svc.name, "normal", startTime, recordIndex++, totalRequests));

@@ -185,7 +185,8 @@
         plus a per-model summary.</li>
         <li>Each row can also take cache-write/cache-read token counts, same as a single request
         — useful since a repeated archetype (the same call-site run many times) is exactly where
-        caching a fixed system prompt or history prefix pays off most.</li>
+        caching a fixed system prompt or history prefix pays off most. When any row uses it, the
+        result shows a "cached" tag per row plus a total cache savings line under the table.</li>
       </ol>
     </div>
 
@@ -206,10 +207,12 @@
 
 records = []  # filled in as your load test runs — see below
 
-def guarded_call(prompt, model, expected_output_tokens, label, phase="normal"):
+def guarded_call(prompt, model, expected_output_tokens, label, phase="normal",
+                  cache_write_tokens=0, cache_read_tokens=0):
     """Every AI call your service makes during the load test goes through here."""
     check = requests.post("http://localhost:8000/analyze", json={
         "prompt": prompt, "model": model, "expected_output_tokens": expected_output_tokens,
+        "cache_write_tokens": cache_write_tokens, "cache_read_tokens": cache_read_tokens,
     }).json()
     records.append({**check, "label": label, "phase": phase})
     return check
@@ -228,6 +231,10 @@ print(f"{report['total_requests']} requests, ${report['total_cost']:.2f}, {repor
         <li>Nothing is stored server-side: you submit the records from a run you already have,
         AIRI just does the arithmetic and renders the report. Run it again tomorrow with a fresh
         set of records and you get a fresh report — there's no history to manage or clean up.</li>
+        <li>Cache-write/cache-read token counts (see step 1) work here too — each service row on
+        the try-it page has the same toggle, and since a report's records are just whatever
+        <code>/analyze</code> results you hand it, <code>total_cost</code> already reflects
+        caching once the records that produced it do.</li>
         <li>The section on the try-it page simulates this whole flow with made-up services so you
         can see the report it produces without wiring anything up first. The pattern above is
         language-agnostic: collect each <code>/analyze</code> result in a JS array from k6,

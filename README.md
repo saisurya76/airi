@@ -168,7 +168,16 @@ At a glance — full reference with `/project` and error formats in
   "method": "tokenizer",
   "confidence": "high",
   "status": "SAFE",
-  "known_model": true
+  "known_model": true,
+  "fresh_input_tokens": 8,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "fresh_input_cost": 0.00002,
+  "cache_write_cost": 0.0,
+  "cache_read_cost": 0.0,
+  "output_cost": 0.005,
+  "cache_savings": 0.0,
+  "cache_pricing_known": true
 }
 ```
 
@@ -176,6 +185,28 @@ At a glance — full reference with `/project` and error formats in
 `EXCEEDED` past 100%. `GET /models` lists everything in the registry for
 a dropdown; an unrecognized model still returns an estimate, just
 flagged `confidence: "low"` and `known_model: false` instead of erroring.
+
+## Cache-aware pricing
+
+Token count alone understates real-world cost once prompt caching is in
+the picture: a chat app resending growing history isn't paying the
+plain input price for every token on every turn — a stable prefix
+(system prompt, prior turns) usually gets cached, and cached tokens are
+billed at a different rate (a steep discount to read, sometimes a
+premium to write). Pass `cache_write_tokens`/`cache_read_tokens` on
+`/analyze`, `/analyze/exact`, or per-archetype on `/project` (both
+default to `0` — a plain request prices exactly as before this existed)
+and the response breaks `estimated_cost` out into `fresh_input_cost` +
+`cache_write_cost` + `cache_read_cost` + `output_cost`, plus a
+`cache_savings` figure — positive means caching saved money on this
+request, negative is normal on a write-only request (the saving shows
+up on later reads of that cache entry, not the request that created
+it). AIRI doesn't detect caching for you; it only prices it once you
+say how many tokens were involved, and a model with no published cache
+price in `airi/registry.py` bills those tokens at the plain input rate
+instead (`cache_pricing_known: false`), never a guessed discount. The
+try-it page's Standard/Exact tool and Traffic projection section both
+have a "+ Using prompt caching?" toggle that exposes this.
 
 ## Volume projection: estimating cost across a whole app
 
@@ -205,9 +236,13 @@ shape `analyze()` takes) plus the volume you expect for it, in whatever
 period you're planning for (daily, monthly — AIRI doesn't care, it's
 just a multiplier). The result gives per-archetype projected tokens and
 cost, a grand total, and a cost/token breakdown by model — useful the
-moment two archetypes use different providers. `POST /project` exposes
-the same thing over HTTP, and the try-it page has a "Traffic projection"
-section that builds the request for you.
+moment two archetypes use different providers. Each archetype can also
+carry `cache_write_tokens`/`cache_read_tokens` (see "Cache-aware
+pricing" above) — a repeated archetype run many times is exactly where
+caching a fixed system prompt or history prefix pays off most, and the
+result's `total_cache_savings` sums it across every archetype.
+`POST /project` exposes the same thing over HTTP, and the try-it page
+has a "Traffic projection" section that builds the request for you.
 
 This is deliberately not the same thing as the frozen spec's P7
 "Predictive Intelligence" (P50/P90/P99 output-length prediction from

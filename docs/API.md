@@ -37,10 +37,16 @@ model name client-side before calling `/analyze`.
 **Response 200**
 ```json
 [
-  { "id": "gpt-4o", "context_window": 128000, "input_price_per_1m": 2.5, "output_price_per_1m": 10.0 },
-  { "id": "claude-3-5-sonnet", "context_window": 200000, "input_price_per_1m": 3.0, "output_price_per_1m": 15.0 }
+  { "id": "gpt-4o", "context_window": 128000, "input_price_per_1m": 2.5, "output_price_per_1m": 10.0,
+    "cache_write_price_per_1m": null, "cache_read_price_per_1m": 0.25 },
+  { "id": "claude-3-5-sonnet", "context_window": 200000, "input_price_per_1m": 3.0, "output_price_per_1m": 15.0,
+    "cache_write_price_per_1m": 3.75, "cache_read_price_per_1m": 0.3 }
 ]
 ```
+
+`cache_write_price_per_1m`/`cache_read_price_per_1m` are `null` when this model has no
+published cache price (see "Cache-aware pricing" under `POST /analyze` above) — check
+for `null` before assuming a model supports a caching discount.
 
 A model name *not* in this list still works with `/analyze` and
 `/project` — it just comes back flagged `"known_model": false` and
@@ -318,7 +324,8 @@ Each entry in `archetypes` takes the same fields as `/analyze` (either
       "projected_input_tokens": 90000,
       "projected_output_tokens": 800000,
       "projected_total_tokens": 890000,
-      "projected_cost": 0.49
+      "projected_cost": 0.49,
+      "projected_cache_savings": 0.0
     }
   ],
   "total_volume": 10500,
@@ -326,9 +333,16 @@ Each entry in `archetypes` takes the same fields as `/analyze` (either
   "total_cost": 2.7625,
   "cost_by_model": { "gpt-4o-mini": 0.49, "claude-3-5-sonnet": 2.2725 },
   "tokens_by_model": { "gpt-4o-mini": 890000, "claude-3-5-sonnet": 157500 },
-  "any_exceeded": false
+  "any_exceeded": false,
+  "total_cache_savings": 0.0
 }
 ```
+
+Each archetype can also take `cache_write_tokens`/`cache_read_tokens` (same fields and
+meaning as `/analyze`, see above) — describing that one representative request, scaled
+by volume like everything else. `projected_cache_savings` is that archetype's
+`unit.cache_savings` × `volume`; `total_cache_savings` sums it across every archetype.
+Both are `0.0` unless at least one archetype set cache tokens.
 
 `any_exceeded` is `true` if any single archetype's *unit* request
 (before multiplying by volume) already exceeds its model's context
