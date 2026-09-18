@@ -33,6 +33,14 @@ class Archetype:
     messages: Optional[list] = None
     model: str = "gpt-4o"
     expected_output_tokens: int = 0
+    # How many of this ONE representative request's input tokens are
+    # cache-write/cache-read (see airi/analyzer.py) — describes the unit
+    # request, same as prompt/messages/expected_output_tokens do, and gets
+    # scaled by volume along with everything else. A repeated archetype
+    # (the same call-site run many times) is exactly where caching is most
+    # realistic — e.g. a fixed system prompt cached across every repetition.
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
 
     @classmethod
     def from_dict(cls, d: dict) -> "Archetype":
@@ -43,6 +51,8 @@ class Archetype:
             messages=d.get("messages"),
             model=d.get("model", "gpt-4o"),
             expected_output_tokens=d.get("expected_output_tokens", 0),
+            cache_write_tokens=d.get("cache_write_tokens", 0),
+            cache_read_tokens=d.get("cache_read_tokens", 0),
         )
 
 
@@ -123,6 +133,8 @@ def project(archetypes: List[Union[Archetype, dict]]) -> ProjectionResult:
             messages=a.messages,
             model=a.model,
             expected_output_tokens=a.expected_output_tokens,
+            cache_write_tokens=a.cache_write_tokens,
+            cache_read_tokens=a.cache_read_tokens,
         )
         if unit.status == "EXCEEDED":
             any_exceeded = True

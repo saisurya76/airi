@@ -277,6 +277,10 @@ class AnalyzeRequest(BaseModel):
     messages: Optional[List[ChatMessage]] = None
     model: str = Field(default="gpt-4o")
     expected_output_tokens: int = Field(default=0, ge=0)
+    # Cache-aware pricing (see airi/pricing.py) — optional, 0 means "not
+    # using caching," prices exactly as before these fields existed.
+    cache_write_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate(self):
@@ -398,6 +402,8 @@ class ArchetypeRequest(BaseModel):
     messages: Optional[List[ChatMessage]] = None
     model: str = Field(default="gpt-4o")
     expected_output_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _validate(self):
@@ -547,6 +553,8 @@ def _do_analyze(body: "AnalyzeRequest") -> dict:
             messages=[m.model_dump() for m in body.messages] if body.messages else None,
             model=body.model,
             expected_output_tokens=body.expected_output_tokens,
+            cache_write_tokens=body.cache_write_tokens,
+            cache_read_tokens=body.cache_read_tokens,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1406,7 +1414,10 @@ def _do_exact(body: "ExactAnalyzeRequest", test_mode: bool) -> dict:
         # model with no exact_provider integration (unknown/unsupported),
         # this is the same heuristic /analyze would give; Exact mode has
         # nothing more to offer it.
-        result = analyze(prompt=body.prompt, messages=messages, model=body.model, expected_output_tokens=body.expected_output_tokens)
+        result = analyze(
+            prompt=body.prompt, messages=messages, model=body.model, expected_output_tokens=body.expected_output_tokens,
+            cache_write_tokens=body.cache_write_tokens, cache_read_tokens=body.cache_read_tokens,
+        )
         return result.to_dict()
 
     api_key = _resolve_exact_api_key(body, spec.provider, test_mode)
@@ -1423,7 +1434,10 @@ def _do_exact(body: "ExactAnalyzeRequest", test_mode: bool) -> dict:
         # was just used in a failed provider call, and we never want any
         # chance of that provider's raw response text (which could echo
         # back part of the request) reaching another user's screen.
-        result = analyze(prompt=body.prompt, messages=messages, model=body.model, expected_output_tokens=body.expected_output_tokens)
+        result = analyze(
+            prompt=body.prompt, messages=messages, model=body.model, expected_output_tokens=body.expected_output_tokens,
+            cache_write_tokens=body.cache_write_tokens, cache_read_tokens=body.cache_read_tokens,
+        )
         data = result.to_dict()
         if test_mode:
             data["exact_mode_note"] = f"Exact provider count unavailable right now ({exc}) — showing the heuristic estimate instead."
@@ -1431,7 +1445,10 @@ def _do_exact(body: "ExactAnalyzeRequest", test_mode: bool) -> dict:
             data["exact_mode_note"] = "Exact provider count unavailable right now (check that your API key is valid) — showing the heuristic estimate instead."
         return data
 
-    result = build_result_from_counts(body.model, input_tokens, "provider-api", "high", body.expected_output_tokens)
+    result = build_result_from_counts(
+        body.model, input_tokens, "provider-api", "high", body.expected_output_tokens,
+        cache_write_tokens=body.cache_write_tokens, cache_read_tokens=body.cache_read_tokens,
+    )
     return result.to_dict()
 
 
@@ -1473,6 +1490,8 @@ def _do_project(body: "ProjectRequest") -> dict:
                 messages=[m.model_dump() for m in a.messages] if a.messages else None,
                 model=a.model,
                 expected_output_tokens=a.expected_output_tokens,
+                cache_write_tokens=a.cache_write_tokens,
+                cache_read_tokens=a.cache_read_tokens,
             )
             for a in body.archetypes
         ]

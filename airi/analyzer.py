@@ -26,6 +26,8 @@ def analyze(
     messages: Optional[List[Message]] = None,
     model: str = "gpt-4o",
     expected_output_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
 ) -> AnalysisResult:
     """
     Estimate tokens, context usage and cost for an AI request.
@@ -39,6 +41,19 @@ def analyze(
         expected_output_tokens: caller-supplied estimate of the response
             size. AIRI does not predict this for you (that's a separate,
             harder problem) — it only accounts for it once you provide it.
+        cache_write_tokens: how many of this request's input tokens are
+            being newly written into a prompt cache (e.g. a system
+            prompt/history prefix your app caches on the first call of a
+            session). AIRI does not detect caching for you — it only
+            prices it once you say how many tokens were involved. 0 (the
+            default) means "not using caching" and prices exactly as
+            before this parameter existed.
+        cache_read_tokens: how many of this request's input tokens are
+            being served from an existing cache entry (a cache hit) —
+            usually the cheapest tokens in the request. See
+            airi/registry.py:ModelSpec for which models have a published
+            cache price; on a model with none, these are billed at the
+            plain input rate instead (never an error).
 
     Returns:
         AnalysisResult
@@ -55,7 +70,10 @@ def analyze(
     else:
         input_tokens, method, confidence = count_tokens(prompt, model, spec.tokenizer_family)
 
-    return build_result_from_counts(model, input_tokens, method, confidence, expected_output_tokens)
+    return build_result_from_counts(
+        model, input_tokens, method, confidence, expected_output_tokens,
+        cache_write_tokens, cache_read_tokens,
+    )
 
 
 def build_result_from_counts(
@@ -64,6 +82,8 @@ def build_result_from_counts(
     method: str,
     confidence: str,
     expected_output_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_read_tokens: int = 0,
 ) -> AnalysisResult:
     """
     Given an input-token count someone else already computed — the local
@@ -98,7 +118,16 @@ def build_result_from_counts(
     else:
         status = "SAFE"
 
-    cost = estimate_cost(input_tokens, estimated_output_tokens, spec)
+    # Split input_tokens into fresh / cache-write / cache-read buckets.
+    # A caller can over-specify (e.g. pass more cache tokens than
+    # input_tokens actually has) — clamp rather than error, write takes
+    # priority over read since a token has to be written before it can
+    # ever be read back.
+    cache_write_tokens = max(0, min(int(cache_write_tokens or 0), input_tokens))
+    cache_read_tokens = max(0, min(int(cache_read_tokens or 0), input_tokens - cache_write_tokens))
+    fresh_input_tokens = input_tokens - cache_write_tokens - cache_read_tokens
+
+    breakdown = estimate_cost(fresh_input_tokens, estimated_output_tokens, spec, cache_write_tokens, cache_read_tokens)
 
     return AnalysisResult(
         model=model,
@@ -107,9 +136,18 @@ def build_result_from_counts(
         estimated_total_tokens=estimated_total_tokens,
         context_window=spec.context_window,
         context_utilization=context_utilization,
-        estimated_cost=cost,
+        estimated_cost=breakdown.total_cost,
         method=method,
         confidence=confidence,
         status=status,
         known_model=known,
+        fresh_input_tokens=fresh_input_tokens,
+        cache_write_tokens=cache_write_tokens,
+        cache_read_tokens=cache_read_tokens,
+        fresh_input_cost=breakdown.fresh_input_cost,
+        cache_write_cost=breakdown.cache_write_cost,
+        cache_read_cost=breakdown.cache_read_cost,
+        output_cost=breakdown.output_cost,
+        cache_savings=breakdown.cache_savings,
+        cache_pricing_known=breakdown.cache_pricing_known,
     )

@@ -62,6 +62,15 @@ send it to a model.
 | `messages` | array of `{role, content}` | one of `prompt`/`messages` | chat-style history; use this OR `prompt`, not both |
 | `model` | string | no (default `gpt-4o`) | see `GET /models`; unknown values still work, see above |
 | `expected_output_tokens` | integer ≥ 0 | no (default `0`) | your own estimate of the response length — AIRI does not predict this for you |
+| `cache_write_tokens` | integer ≥ 0 | no (default `0`) | how many of this request's input tokens are being newly written into a prompt cache (e.g. a system prompt/history prefix your app caches on the first call of a session). `0` prices exactly as if caching weren't used |
+| `cache_read_tokens` | integer ≥ 0 | no (default `0`) | how many of this request's input tokens are being served from an existing cache entry (a cache hit) — usually the cheapest tokens in the request |
+
+`cache_write_tokens`/`cache_read_tokens` are capped at `input_tokens`
+(clamped, never an error, write takes priority over read) — AIRI does
+not detect caching for you, it only prices it once you say how many
+tokens were involved. On a model with no published cache price (see
+`airi/registry.py:ModelSpec`), these are billed at the plain input rate
+instead, and the response's `cache_pricing_known` says so.
 
 Request size is capped at 200,000 characters combined across
 `prompt`/`messages` (`MAX_PROMPT_CHARS` in `api.py`).
@@ -88,7 +97,16 @@ Request size is capped at 200,000 characters combined across
   "method": "tokenizer",
   "confidence": "high",
   "status": "SAFE",
-  "known_model": true
+  "known_model": true,
+  "fresh_input_tokens": 8,
+  "cache_write_tokens": 0,
+  "cache_read_tokens": 0,
+  "fresh_input_cost": 0.00002,
+  "cache_write_cost": 0.0,
+  "cache_read_cost": 0.0,
+  "output_cost": 0.005,
+  "cache_savings": 0.0,
+  "cache_pricing_known": true
 }
 ```
 
@@ -99,11 +117,19 @@ Request size is capped at 200,000 characters combined across
 | `estimated_total_tokens` | `input_tokens + estimated_output_tokens` |
 | `context_window` | the model's context size from the registry (or a conservative default for an unknown model) |
 | `context_utilization` | `estimated_total_tokens / context_window`, 0–1+ |
-| `estimated_cost` | USD, from the registry's per-1M-token pricing |
+| `estimated_cost` | USD, from the registry's per-1M-token pricing — this is `fresh_input_cost + cache_write_cost + cache_read_cost + output_cost` |
 | `method` | `"tokenizer"` (exact, via tiktoken) or `"heuristic"` (chars/4 estimate) — see the README's "Tokenizer accuracy" |
 | `confidence` | `"high"` (exact tokenizer), `"medium"` (heuristic on a known model), or `"low"` (unrecognized model) |
 | `status` | `"SAFE"` (<80% of context window), `"WARNING"` (≥80%), or `"EXCEEDED"` (over 100%) |
 | `known_model` | whether `model` was found in the registry |
+| `fresh_input_tokens` / `cache_write_tokens` / `cache_read_tokens` | `input_tokens` split by what each was billed as — sums back to `input_tokens`. All the caching fields default to a no-caching request (all input fresh) unless you set `cache_write_tokens`/`cache_read_tokens` in the request |
+| `fresh_input_cost` / `cache_write_cost` / `cache_read_cost` / `output_cost` | USD cost of each bucket — see `airi/pricing.py` |
+| `cache_savings` | what the input side cost vs. pricing all of it fresh — positive means caching saved money on this request, negative is normal on a cache-write-only request (the write itself is usually pricier than fresh input; the saving shows up on later reads of that same cache entry) |
+| `cache_pricing_known` | `false` means any cache tokens you sent were billed at the plain input rate because this model has no published cache price in the registry — not that caching wasn't used |
+
+These same cache-aware fields appear anywhere else an `AnalysisResult` is
+returned — `/analyze/exact` below, and each archetype's `unit` object in
+`/project` — not just `/analyze`.
 
 **Errors**
 

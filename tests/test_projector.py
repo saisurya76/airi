@@ -76,6 +76,38 @@ def test_unknown_model_still_projects():
     print("OK: unknown_model_still_projects")
 
 
+def test_archetype_cache_tokens_flow_through_to_unit():
+    r = project(
+        [
+            Archetype(
+                name="cached chat",
+                volume=100,
+                prompt="word " * 500,
+                model="claude-3-5-sonnet",
+                expected_output_tokens=50,
+                cache_write_tokens=100,
+                cache_read_tokens=200,
+            )
+        ]
+    )
+    unit = r.archetypes[0].unit
+    assert unit.cache_write_tokens == 100
+    assert unit.cache_read_tokens == 200
+    assert unit.cache_read_cost > 0
+    # projected_cost is still just the unit's per-request cost * volume —
+    # caching is a per-unit-request pricing detail, scaled like everything else.
+    assert abs(r.archetypes[0].projected_cost - round(unit.estimated_cost * 100, 6)) < 1e-6
+    print("OK: archetype_cache_tokens_flow_through_to_unit ->", unit.to_dict())
+
+
+def test_archetype_cache_tokens_default_to_zero():
+    r = project([Archetype(name="chat reply", volume=1000, prompt="Hello!", model="gpt-4o", expected_output_tokens=50)])
+    unit = r.archetypes[0].unit
+    assert unit.cache_write_tokens == 0
+    assert unit.cache_read_tokens == 0
+    print("OK: archetype_cache_tokens_default_to_zero")
+
+
 def test_any_exceeded_flag():
     huge = "word " * 20000
     r = project(
@@ -97,5 +129,7 @@ if __name__ == "__main__":
     test_empty_list_rejected()
     test_too_many_archetypes_rejected()
     test_unknown_model_still_projects()
+    test_archetype_cache_tokens_flow_through_to_unit()
+    test_archetype_cache_tokens_default_to_zero()
     test_any_exceeded_flag()
     print("\nAll projector sanity checks passed.")
