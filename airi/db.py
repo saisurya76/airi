@@ -68,20 +68,24 @@ def reset_pool_for_tests() -> None:
 
 # ---------- otp_codes ----------
 
-def count_recent_otp_requests(email: str, since: datetime) -> int:
-    """How many codes has this email requested since `since`? Used for
-    rate limiting (both the 60-second cooldown and the daily cap).
+def count_recent_otp_requests(email: str, since: datetime, purpose: str = "login") -> int:
+    """How many codes of this purpose has this email requested since
+    `since`? Used for rate limiting (both the 60-second cooldown and the
+    daily cap).
 
-    Deliberately NOT filtered by purpose (see otp_codes.purpose, sql/011)
-    — a login code and a CoE-toggle step-up code draw from the same
-    per-email budget. That's a simplicity choice (protecting the shared
-    Resend quota matters more than letting the two accumulate
-    independently), not a security one; revisit if it turns out to be
-    annoying in practice."""
+    Filtered by purpose (see otp_codes.purpose, sql/011) so a login code
+    and a CoE-toggle step-up code draw from SEPARATE per-email budgets —
+    this used to be a single shared budget across both purposes, which
+    meant a workspace admin who'd used up (or merely recently requested)
+    a sign-in code could get a 429 trying to toggle CoE governance
+    minutes later, and someone toggling governance for a second project
+    right after the first could get 429'd by their own immediately-prior
+    toggle-code request. Each purpose now gets its own independent
+    60-second cooldown and 5/day cap."""
     with _cursor() as cur:
         cur.execute(
-            "SELECT count(*) AS n FROM otp_codes WHERE lower(email) = lower(%s) AND created_at >= %s",
-            (email, since),
+            "SELECT count(*) AS n FROM otp_codes WHERE lower(email) = lower(%s) AND purpose = %s AND created_at >= %s",
+            (email, purpose, since),
         )
         return cur.fetchone()["n"]
 

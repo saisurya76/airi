@@ -690,9 +690,9 @@ def request_code(body: RequestCodeBody):
 
     now = datetime.now(timezone.utc)
     try:
-        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS)) > 0:
+        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS), purpose=LOGIN_OTP_PURPOSE) > 0:
             raise HTTPException(status_code=429, detail="Please wait a minute before requesting another code.")
-        if db.count_recent_otp_requests(email, now - timedelta(hours=24)) >= OTP_DAILY_REQUEST_LIMIT:
+        if db.count_recent_otp_requests(email, now - timedelta(hours=24), purpose=LOGIN_OTP_PURPOSE) >= OTP_DAILY_REQUEST_LIMIT:
             raise HTTPException(status_code=429, detail="Too many code requests for this email today — try again tomorrow.")
 
         code = generate_code()
@@ -837,9 +837,9 @@ def request_coe_governance_code(authorization: Optional[str] = Header(default=No
     pepper = _get_auth_secret()
     now = datetime.now(timezone.utc)
     try:
-        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS)) > 0:
+        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS), purpose=COE_TOGGLE_OTP_PURPOSE) > 0:
             raise HTTPException(status_code=429, detail="Please wait a minute before requesting another code.")
-        if db.count_recent_otp_requests(email, now - timedelta(hours=24)) >= OTP_DAILY_REQUEST_LIMIT:
+        if db.count_recent_otp_requests(email, now - timedelta(hours=24), purpose=COE_TOGGLE_OTP_PURPOSE) >= OTP_DAILY_REQUEST_LIMIT:
             raise HTTPException(status_code=429, detail="Too many code requests for this email today — try again tomorrow.")
 
         code = generate_code()
@@ -1148,6 +1148,33 @@ def project_types():
     return ws.PROJECT_TYPES
 
 
+@app.get("/projects/coe-catalog")
+def coe_catalog():
+    """Everything the frontend needs to render the risk form and the 6
+    gates without hardcoding any of it — same convention as
+    /projects/tech-stack-categories and /theme-catalog.
+
+    MUST be declared before any `/projects/{project_id}...` route below
+    (same reason tech_stack_categories/project_types above already are):
+    FastAPI/Starlette matches routes in declaration order, and
+    `{project_id}: int` would otherwise greedily match the literal path
+    segment "coe-catalog" first, fail to parse it as an int, and 422 —
+    exactly what happened when this endpoint was declared further down,
+    after get_project/update_project/delete_project. Every mocked test
+    in this repo intercepts the network layer by path regex rather than
+    hitting the real FastAPI route table, which is why that ordering bug
+    was invisible to pytest/Playwright and only showed up against the
+    live deployment."""
+    return {
+        "risk_factors": ws.RISK_FACTORS,
+        "risk_tiers": ws.RISK_TIERS,
+        "gates": ws.COE_GATES,
+        "roles": ws.ACCOUNTABLE_ROLES,
+        "gate_statuses": ws.GATE_STATUSES,
+        "enforcement_lookup": ws.ENFORCEMENT_LOOKUP,
+    }
+
+
 @app.post("/workspaces/{workspace_id}/projects")
 def create_project(workspace_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only: creating a project is a workspace-identity operation,
@@ -1234,6 +1261,11 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 # --- CoE governance (a project's risk tier, 6 gates, and 3 accountable ---
 # --- roles when that project has it turned on; see airi/workspaces.py) ---
 #
+# GET /projects/coe-catalog itself lives further up, right after
+# project_types() — see its docstring for why it has to be declared
+# before any /projects/{project_id}... route rather than down here with
+# its sibling write endpoints.
+#
 # Deliberately open to any active workspace member, not admin-only, for
 # the risk form and gate updates — same level as notes/tool runs
 # ("working inside the project"), because the whole point of "breeze to
@@ -1243,24 +1275,9 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 # admin-only, same bucket as changing a project's title or type. All 3
 # writes 400 via _require_coe_governance_enabled if THIS PROJECT's own
 # switch is off — see ws: "projects: CoE governance". Flipping that
-# switch itself (PUT /projects/{id}/coe-governance, below, right after
-# update_project) is a step further up than plain admin-only: it also
-# needs a step-up email code.
-
-
-@app.get("/projects/coe-catalog")
-def coe_catalog():
-    """Everything the frontend needs to render the risk form and the 6
-    gates without hardcoding any of it — same convention as
-    /projects/tech-stack-categories and /theme-catalog."""
-    return {
-        "risk_factors": ws.RISK_FACTORS,
-        "risk_tiers": ws.RISK_TIERS,
-        "gates": ws.COE_GATES,
-        "roles": ws.ACCOUNTABLE_ROLES,
-        "gate_statuses": ws.GATE_STATUSES,
-        "enforcement_lookup": ws.ENFORCEMENT_LOOKUP,
-    }
+# switch itself (PUT /projects/{id}/coe-governance, further up, right
+# after update_project) is a step further up than plain admin-only: it
+# also needs a step-up email code.
 
 
 @app.put("/projects/{project_id}/coe-risk")
