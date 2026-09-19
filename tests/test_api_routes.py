@@ -69,6 +69,29 @@ def test_project_id_route_still_reports_not_found_for_a_real_int_path():
     print("OK: project_id_route_still_reports_not_found_for_a_real_int_path")
 
 
+def test_ai_guide_route_is_registered_and_shaped_correctly():
+    """Regression guard for the Live AI Guide endpoint (Phase 6c): checks
+    it's actually wired into the route table at the expected path shape
+    (project_id, then a literal /coe-phases/, then gate_key, then a
+    literal /ai-guide — extra segments after {project_id}, so this can
+    never suffer the coe-catalog-style shadowing bug, but a typo in the
+    path string itself wouldn't show up any other way)."""
+    matches = [r for r in api.app.routes if getattr(r, "path", None) == "/projects/{project_id}/coe-phases/{gate_key}/ai-guide"]
+    assert matches, "POST /projects/{project_id}/coe-phases/{gate_key}/ai-guide is not registered"
+    assert "POST" in matches[0].methods
+    print("OK: ai_guide_route_is_registered_and_shaped_correctly")
+
+
+def test_ai_guide_rate_limit_is_its_own_separate_budget():
+    """Regression guard for the coe_toggle 429 lesson (see
+    docs/WORKSPACES.md's "The two switches"): AI Guide must never share
+    its rate-limit counter with Exact mode's — a burst of one shouldn't
+    eat into the other's budget."""
+    assert api._ai_guide_call_log is not api._exact_call_log
+    assert isinstance(api.AI_GUIDE_CALLS_PER_MINUTE, int) and api.AI_GUIDE_CALLS_PER_MINUTE > 0
+    print("OK: ai_guide_rate_limit_is_its_own_separate_budget")
+
+
 def test_coe_toggle_rate_limits_are_more_generous_than_login():
     """Regression guard for the 429 an admin hit doing completely normal
     interactive use of the CoE toggle (flip a project on, cancel, retry,
@@ -89,5 +112,7 @@ if __name__ == "__main__":
     test_tech_stack_categories_route_is_not_shadowed_by_project_id()
     test_project_types_route_is_not_shadowed_by_project_id()
     test_project_id_route_still_reports_not_found_for_a_real_int_path()
+    test_ai_guide_route_is_registered_and_shaped_correctly()
+    test_ai_guide_rate_limit_is_its_own_separate_budget()
     test_coe_toggle_rate_limits_are_more_generous_than_login()
     print("\nAll api route sanity checks passed.")

@@ -473,7 +473,7 @@ def get_active_memberships_by_email(email: str) -> List[dict]:
 _PROJECT_FIELDS = (
     "id, workspace_id, title, description, tech_stack, project_type, "
     "risk_tier, risk_factors, risk_explanation, coe_roles, coe_phase_state, "
-    "coe_governance_enabled, created_at, updated_at"
+    "coe_governance_enabled, coe_gate_ai_guides, created_at, updated_at"
 )
 
 
@@ -616,7 +616,7 @@ def delete_note(note_id: int) -> bool:
         return cur.rowcount > 0
 
 
-# ---------- CoE governance (workspaces feature, Phase 6a/6b) ----------
+# ---------- CoE governance (workspaces feature, Phase 6a/6b/6c) ----------
 #
 # risk_tier/risk_factors/risk_explanation/coe_roles/coe_phase_state on
 # `projects` are current-state caches (see sql/008_coe_governance.sql) —
@@ -630,6 +630,10 @@ def delete_note(note_id: int) -> bool:
 # is the one that actually governs an existing project day to day. Both
 # setters are called only after the step-up email code has verified
 # (api.py), never straight from a general settings save.
+#
+# coe_gate_ai_guides (sql/012) is the one field here that ISN'T a plain
+# full-replace — see set_project_gate_ai_guide's own docstring for why it
+# does an atomic JSONB merge instead.
 
 def set_project_risk(project_id: int, risk_tier: str, risk_factors: Dict[str, str], risk_explanation: str) -> Optional[dict]:
     with _cursor() as cur:
@@ -687,6 +691,37 @@ def set_project_coe_governance(project_id: int, enabled: bool) -> Optional[dict]
             RETURNING {_PROJECT_FIELDS}
             """,
             (enabled, project_id),
+        )
+        return cur.fetchone()
+
+
+def set_project_gate_ai_guide(project_id: int, gate_key: str, checklist: List[str], provider: str) -> Optional[dict]:
+    """Live AI Guide per gate (Phase 6c; see sql/012 and
+    airi/ai_guide_provider.py). Deliberately an ATOMIC JSONB merge
+    (`coalesce(...) || %s::jsonb`), not a read-modify-write like every
+    other CoE setter in this section: two admins regenerating different
+    gates' guides for the same project at close to the same time is a
+    real scenario this feature introduces — a read-modify-write could
+    have each caller's UPDATE start from the same pre-write JSON and
+    write back a full replace missing the other's key, silently dropping
+    one of the two guides. The `||` merge instead only ever touches the
+    one gate_key being written, whatever else is already in the column.
+    coalesce(...) guards a NULL value even though sql/012's DEFAULT is
+    already '{}'::jsonb — defense in depth, not a fix for anything
+    actually reachable today."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects
+            SET coe_gate_ai_guides = coalesce(coe_gate_ai_guides, '{{}}'::jsonb) || %s::jsonb,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (
+                Json({gate_key: {"items": checklist, "provider": provider, "generated_at": datetime.now(timezone.utc).isoformat()}}),
+                project_id,
+            ),
         )
         return cur.fetchone()
 

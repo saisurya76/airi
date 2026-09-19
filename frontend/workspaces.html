@@ -2075,6 +2075,46 @@
     return { advisory: "Advisory", required_justification: "Needs a reason to override", mandatory: "Mandatory" }[level] || "";
   }
 
+  // ---------- Live AI Guide per gate (Phase 6c) — opt-in, BYOK-only ----------
+  //
+  // Reuses the exact same BYOK_ANTHROPIC_KEY/BYOK_GOOGLE_KEY localStorage
+  // entries the Exact tab already reads (see renderToolPanel above) —
+  // there's no separate "AI guide key" to configure anywhere. That's a
+  // deliberate answer to "should BYOK be workspace-level or project-
+  // level": neither — it's already a single per-browser key shared
+  // across the whole app, so this feature just piggybacks on it rather
+  // than inventing new key-storage/scoping of its own.
+  function hasAnyByokKey() {
+    try {
+      return !!(localStorage.getItem(BYOK_ANTHROPIC_KEY) || localStorage.getItem(BYOK_GOOGLE_KEY));
+    } catch (e) {
+      return false; // private-browsing/storage-blocked: treat as "no key configured", not an error
+    }
+  }
+
+  function aiGuideBlockHtml(project, gate) {
+    const guide = (project.coe_gate_ai_guides || {})[gate.key];
+    if (!hasAnyByokKey()) {
+      return `
+        <div class="ai-guide-block" style="margin-top:10px;">
+          <p class="sub" style="margin:0;">Want an AI-tailored checklist for this gate? <a href="app.html" style="color:var(--accent);">Add your own Anthropic or Google key</a> — optional, never required for CoE governance.</p>
+        </div>
+      `;
+    }
+    const listHtml = guide && guide.items && guide.items.length
+      ? `<ul style="margin:8px 0 0; padding-left:18px;">${guide.items.map((item) => `<li class="sub" style="margin-bottom:4px;">${escapeHtml(item)}</li>`).join("")}</ul>
+         <p class="sub" style="margin:6px 0 0; font-size:11px;">Generated ${new Date(guide.generated_at).toLocaleString()} via ${escapeHtml(guide.provider || "")}.</p>`
+      : `<p class="sub" style="margin:8px 0 0;">No AI guide generated yet for this gate — optional, the checklist above already covers what's required.</p>`;
+    return `
+      <div class="ai-guide-block" style="margin-top:10px;">
+        <div style="font-size:13px; color:var(--text); font-weight:600;">AI guide (optional)</div>
+        ${listHtml}
+        <div class="row" style="margin-top:8px;"><div><button type="button" class="secondary-btn" data-ai-guide-btn style="width:100%;">${guide ? "Regenerate" : "Get AI guide"}</button></div></div>
+        <div class="error hidden" data-ai-guide-error></div>
+      </div>
+    `;
+  }
+
   function gateRowHtml(project, gate) {
     const state = (project.coe_phase_state || {})[gate.key] || {};
     const status = state.status || "not_started";
@@ -2092,6 +2132,7 @@
         <div class="history-detail hidden" style="margin-top:10px;">
           <p class="sub" style="margin-top:0;">${escapeHtml(gate.guide_question)}</p>
           <p class="sub">Accountable: <b>${escapeHtml(roleLabel)}</b>${enforcement ? ` · ${escapeHtml(enforcement)}` : ""}</p>
+          ${aiGuideBlockHtml(project, gate)}
           <div class="field">
             <label>Status</label>
             <select data-gate-status>
@@ -2133,6 +2174,33 @@
           errorEl.classList.remove("hidden");
         }
       });
+      const aiGuideBtn = rowEl.querySelector("[data-ai-guide-btn]");
+      if (aiGuideBtn) {
+        aiGuideBtn.addEventListener("click", async () => {
+          const errorEl = rowEl.querySelector("[data-ai-guide-error]");
+          errorEl.classList.add("hidden");
+          const payload = {};
+          try {
+            const a = localStorage.getItem(BYOK_ANTHROPIC_KEY);
+            const g = localStorage.getItem(BYOK_GOOGLE_KEY);
+            if (a) payload.anthropic_api_key = a;
+            if (g) payload.google_api_key = g;
+          } catch (e) { /* private-browsing/storage-blocked — payload stays empty, server 400s clearly */ }
+          aiGuideBtn.disabled = true;
+          const originalLabel = aiGuideBtn.textContent;
+          aiGuideBtn.textContent = "Generating…";
+          try {
+            const updated = await apiFetch(`/projects/${project.id}/coe-phases/${gateKey}/ai-guide`, { method: "POST", body: JSON.stringify(payload) });
+            Object.assign(project, updated);
+            rerender();
+          } catch (e) {
+            errorEl.textContent = e.message;
+            errorEl.classList.remove("hidden");
+            aiGuideBtn.disabled = false;
+            aiGuideBtn.textContent = originalLabel;
+          }
+        });
+      }
     });
   }
 

@@ -46,6 +46,7 @@ from airi.auth import (
     verify_code,
     verify_session_token,
 )
+from airi.ai_guide_provider import AiGuideUnavailable, GateGuideContext, generate_gate_checklist
 from airi.email_provider import EmailSendError, send_member_added_email, send_member_removed_email, send_otp_email
 from airi.exact_provider import ExactCountUnavailable, count_tokens_exact, has_exact_provider
 from airi.projector import MAX_ARCHETYPES
@@ -76,6 +77,20 @@ EXACT_CALLS_PER_MINUTE = 20         # per signed-in user — protects the shared
 # switches").
 COE_TOGGLE_REQUEST_COOLDOWN_SECONDS = 15  # just enough to absorb an accidental double-click
 COE_TOGGLE_DAILY_REQUEST_LIMIT = 30       # per email, per rolling 24h
+
+# Live AI Guide per gate (POST /projects/{id}/coe-phases/{gate_key}/ai-guide)
+# is always BYOK — a real, billed generation call, never AIRI's own key,
+# regardless of test_mode (see _resolve_ai_guide_api_key). Its own
+# separate sliding-window limiter, deliberately tighter than
+# EXACT_CALLS_PER_MINUTE: this isn't protecting a shared server-held key
+# (there isn't one here to protect — it's the caller's own key and their
+# own spend), it's just a sane cap on accidental repeated clicks against
+# our server per minute. Kept as its own log/constant rather than reusing
+# _check_exact_rate_limit — sharing a limiter across two unrelated
+# features is exactly the mistake that caused the coe_toggle 429s (see
+# docs/WORKSPACES.md's "The two switches"): a burst of Exact-mode calls
+# would otherwise eat into a user's AI Guide budget and vice versa.
+AI_GUIDE_CALLS_PER_MINUTE = 6
 
 
 def _get_auth_secret() -> str:
@@ -270,6 +285,23 @@ def _check_exact_rate_limit(email: str) -> None:
         log.popleft()
     if len(log) >= EXACT_CALLS_PER_MINUTE:
         raise HTTPException(status_code=429, detail="Exact mode is rate-limited — please slow down and try again shortly.")
+    log.append(now)
+
+
+# Separate in-process limiter for the AI Guide endpoint — see
+# AI_GUIDE_CALLS_PER_MINUTE's comment for why this isn't just
+# _check_exact_rate_limit reused.
+_ai_guide_call_log: Dict[str, deque] = defaultdict(deque)
+
+
+def _check_ai_guide_rate_limit(email: str) -> None:
+    now = time.monotonic()
+    window_start = now - 60
+    log = _ai_guide_call_log[email]
+    while log and log[0] < window_start:
+        log.popleft()
+    if len(log) >= AI_GUIDE_CALLS_PER_MINUTE:
+        raise HTTPException(status_code=429, detail="AI Guide is rate-limited — please slow down and try again shortly.")
     log.append(now)
 
 app = FastAPI(
@@ -481,6 +513,18 @@ class CoeRiskBody(BaseModel):
 class CoeGateBody(BaseModel):
     status: str = ws.DEFAULT_GATE_STATUS
     note: str = ""
+
+
+class CoeGateAiGuideBody(BaseModel):
+    """Body for POST /projects/{id}/coe-phases/{gate_key}/ai-guide — same
+    two optional BYOK fields, same never-stored promise, as
+    ExactAnalyzeRequest, but this endpoint is ALWAYS BYOK (see
+    _resolve_ai_guide_api_key): unlike Exact mode, there's no test_mode
+    branch that uses AIRI's own key, because this is a real, billed
+    generation call rather than a free token count."""
+
+    anthropic_api_key: Optional[str] = Field(default=None, max_length=MAX_BYOK_KEY_CHARS)
+    google_api_key: Optional[str] = Field(default=None, max_length=MAX_BYOK_KEY_CHARS)
 
 
 class CoeRolesBody(BaseModel):
@@ -1286,6 +1330,14 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 # before any /projects/{project_id}... route rather than down here with
 # its sibling write endpoints.
 #
+# POST /projects/{id}/coe-phases/{gate_key}/ai-guide (Phase 6c, right
+# after set_project_coe_gate below) is a fourth write in this family, but
+# a different shape from the other three: it's the one CoE write that
+# calls out to a real third-party AI provider, always with the caller's
+# own BYOK key, and it's opt-in on top of an already-opt-in feature
+# (turning CoE governance off entirely doesn't remove any Guide it
+# already generated for a gate — see set_project_gate_ai_guide).
+#
 # Deliberately open to any active workspace member, not admin-only, for
 # the risk form and gate updates — same level as notes/tool runs
 # ("working inside the project"), because the whole point of "breeze to
@@ -1392,6 +1444,84 @@ def list_project_coe_ledger(project_id: int, authorization: Optional[str] = Head
     user_id = _require_user_id(authorization)
     _get_accessible_project(project_id, user_id)
     return db.list_coe_events(project_id)
+
+
+def _resolve_ai_guide_api_key(body: "CoeGateAiGuideBody") -> Tuple[str, str]:
+    """Picks which provider + key a Live AI Guide call should use.
+
+    Always BYOK, with no test_mode branch at all — unlike
+    _resolve_exact_api_key, there's no free/server-held-key path here,
+    because this is a real, billed generation call (see module docstring
+    on airi/ai_guide_provider.py). 400 (a per-caller, fixable problem) if
+    neither key is present. Prefers Anthropic when both are configured —
+    an arbitrary but harmless tie-break, matching this codebase's other
+    anthropic-then-google ordering (ExactAnalyzeRequest's fields,
+    _PROVIDER_FUNCS in both provider modules)."""
+    if body.anthropic_api_key:
+        return "anthropic", body.anthropic_api_key
+    if body.google_api_key:
+        return "google", body.google_api_key
+    raise HTTPException(
+        status_code=400,
+        detail="This feature needs your own Anthropic or Google (Gemini) API key — add one under \"Manage keys\".",
+    )
+
+
+@app.post("/projects/{project_id}/coe-phases/{gate_key}/ai-guide")
+def get_coe_gate_ai_guide(
+    project_id: int, gate_key: str, body: CoeGateAiGuideBody, authorization: Optional[str] = Header(default=None),
+):
+    """Live AI Guide per gate (Phase 6c): turns this gate's static
+    guide_question into a short, project-specific checklist via a real
+    generation call to the caller's own BYOK key (see
+    airi/ai_guide_provider.py) — never AIRI's own key, and never
+    mandatory: every other Governance tab feature works identically with
+    no key configured at all, this is a pure opt-in add-on layered on
+    top.
+
+    Open to any active member (same bucket as coe-risk/coe-phases, not
+    admin-only — whoever is doing the work can ask for a guide without
+    routing through the workspace admin), 400s via
+    _require_coe_governance_enabled if this project's switch is off, and
+    404s for an unknown gate_key before spending anyone's API quota on a
+    request that can't be saved anyway. Persists the result into
+    coe_gate_ai_guides (an atomic JSONB merge — see
+    db.set_project_gate_ai_guide) so it survives a reload instead of
+    re-generating on every tab open; the frontend's "Regenerate" button
+    is just this same endpoint called again."""
+    email, user_id = _require_session_email_and_user_id(authorization)
+    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    _require_coe_governance_enabled(project_row)
+    if gate_key not in ws.COE_GATES_BY_KEY:
+        raise HTTPException(status_code=404, detail="Unknown gate.")
+    _check_ai_guide_rate_limit(email)
+    provider, api_key = _resolve_ai_guide_api_key(body)
+
+    gate = ws.COE_GATES_BY_KEY[gate_key]
+    tier = project_row.get("risk_tier") or "low"
+    context = GateGuideContext(
+        project_title=project_row.get("title") or "",
+        project_description=project_row.get("description") or "",
+        project_type=project_row.get("project_type") or "",
+        tech_stack=project_row.get("tech_stack") or {},
+        risk_tier=tier,
+        risk_explanation=project_row.get("risk_explanation") or "",
+        gate_label=gate["label"],
+        guide_question=gate["guide_question"],
+        accountable_role_label=ws.ACCOUNTABLE_ROLES[gate["accountable_role"]]["label"],
+        enforcement_level=ws.enforcement_level(tier, gate_key),
+    )
+    try:
+        checklist = generate_gate_checklist(context, provider, api_key)
+    except AiGuideUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    updated = db.set_project_gate_ai_guide(project_id, gate_key, checklist, provider)
+    db.create_coe_event(
+        project_id, gate_key, "ai_guide_generated", user_id,
+        from_value="", to_value=provider, note="",
+    )
+    return updated
 
 
 # --- Saved tool runs inside a project (Phase 2 — see docs/WORKSPACES.md) ---

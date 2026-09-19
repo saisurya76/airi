@@ -14,8 +14,10 @@ instead of just an email notification; Phase 6 (see "CoE Governance"
 below) adds a risk-tiered governance model, switched on per project
 (defaulted from a workspace-level setting) rather than for a whole
 workspace at once, with the on/off switch itself requiring a step-up
-email code on top of being the workspace admin. No further phases are
-planned as of this delivery.
+email code on top of being the workspace admin, and gives each gate a
+Live AI Guide — an opt-in, BYOK-only AI-generated checklist tailored to
+that specific project (see "Live AI Guide per gate" below). No further
+phases are planned as of this delivery.
 
 Like Exact mode, this entire feature requires a signed-in session — a
 workspace's admin signs in with email + OTP (see
@@ -613,6 +615,64 @@ unchanged," so nothing is silently lost. `GET
 renders it as a collapsed "History" section, reusing the
 `.history-entry` pattern already used elsewhere in this file.
 
+### Live AI Guide per gate
+
+Each gate's static `guide_question` ("Does this meet the model,
+architecture, and data standards?") is the same for every project.
+`POST /projects/{id}/coe-phases/{gate_key}/ai-guide` turns it into a
+short, concrete checklist tailored to *this* project — its title,
+description, tech stack, risk tier, and this gate's enforcement level
+at that tier — via a real generation call (`airi/ai_guide_provider.py`)
+to Anthropic's `/v1/messages` or Google's `:generateContent`.
+
+Three things distinguish this from every other CoE write:
+
+- **Always BYOK, never AIRI's own key.** Unlike Exact mode
+  (`airi/exact_provider.py`), which uses AIRI's shared server-held key
+  in "test mode," this is a real, billed generation call — there's no
+  free tier to fall back to, and no deployment-wide switch that changes
+  that. `_resolve_ai_guide_api_key` in api.py has no test_mode branch
+  at all; the request body just needs an `anthropic_api_key` or
+  `google_api_key`, same optional fields as `ExactAnalyzeRequest`,
+  400ing if neither is present.
+- **Genuinely optional.** Every other part of the Governance tab — risk
+  tiering, the 6 gates, roles, the ledger — works identically whether
+  or not the caller has a BYOK key configured. This is a pure add-on
+  layered on top: the frontend shows a quiet "add your own key"
+  nudge (linking to the same "Manage keys" panel on `app.html` the
+  Exact tab already uses) when neither `airi_byok_anthropic_key` nor
+  `airi_byok_google_key` is in `localStorage`, and a "Get AI guide" /
+  "Regenerate" button when one is.
+- **The BYOK key itself is already global, not scoped to a workspace or
+  project.** It lives in the browser's `localStorage`, shared across
+  the whole app (`app.html`'s Exact tab and every project's Exact tab
+  in `workspaces.html` already read the exact same two keys) — this
+  feature reuses that as-is rather than adding a workspace-level or
+  project-level key of its own.
+
+The result is saved into `projects.coe_gate_ai_guides` (sql/012), keyed
+by `gate_key`, and shown as-is until the caller clicks "Regenerate" —
+there's no auto-refresh, matching the "save it, with a manual refresh
+button" behavior decided for this feature. The write itself is an
+atomic JSONB merge rather than the read-modify-write every other CoE
+setter uses (see `set_project_gate_ai_guide` in `airi/db.py`): two
+admins regenerating different gates' guides at close to the same time
+is a real scenario this feature introduces, and only the merge shape
+guarantees neither write clobbers the other. Generating a guide also
+appends an `ai_guide_generated` ledger event (`gate_key`, and which
+provider answered) — visibility into when and how a guide was produced,
+without duplicating the (potentially large) checklist text into the
+ledger itself.
+
+Its own rate limit (`AI_GUIDE_CALLS_PER_MINUTE`, a separate in-process
+sliding-window log from `EXACT_CALLS_PER_MINUTE`'s) exists purely to
+absorb accidental repeated clicks against AIRI's own server — never to
+protect a shared provider key, since there isn't one here. This is
+deliberately its own log, not `_check_exact_rate_limit` reused, for the
+exact reason the CoE-toggle 429s happened twice in a row (see "The two
+switches" above): two unrelated features sharing one counter means a
+burst of one silently eats into the other's budget.
+
 ### API reference (Phase 6)
 
 | Endpoint | Purpose |
@@ -628,6 +688,7 @@ renders it as a collapsed "History" section, reusing the
 | `PUT /projects/{id}/coe-roles` | Admin-only, and 400s if this project's switch is off. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
 | `PUT /projects/{id}/coe-phases/{gate_key}` | 400s if this project's switch is off. Otherwise body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
 | `GET /projects/{id}/coe-ledger` | All `coe_control_events` for the project, newest-first. Not gated by the switch — reading a project's (possibly empty) history is harmless either way. |
+| `POST /projects/{id}/coe-phases/{gate_key}/ai-guide` | Any active member; 400s if this project's switch is off, 404s for an unknown `gate_key`. Body: `{"anthropic_api_key"?, "google_api_key"?}` — always BYOK, no test_mode fallback; 400s if neither is present. Calls out to the real Anthropic/Google generation API (never a free/counting endpoint), saves the resulting checklist into `coe_gate_ai_guides` via an atomic JSONB merge, and appends an `ai_guide_generated` ledger event. Its own rate limit, `AI_GUIDE_CALLS_PER_MINUTE`, kept deliberately separate from `EXACT_CALLS_PER_MINUTE`. |
 
 ## What's next
 
