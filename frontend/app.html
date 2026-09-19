@@ -441,16 +441,22 @@
     <div id="testModeNote" class="panel hidden">
       <p class="info-note" style="margin:0;">
         This deployment is in <b style="color:var(--text);">testing mode</b> — Exact requests use
-        AIRI's own shared Anthropic/Gemini keys, so there's nothing for you to configure.
+        AIRI's own shared Anthropic/Gemini keys, so there's nothing for you to configure here.
+        One feature is different: the optional <b style="color:var(--text);">Live AI Guide</b>
+        in a project's Governance tab (Workspaces) always uses your own key, regardless of this
+        setting — click "Manage keys" above if you want to use it.
       </p>
     </div>
 
     <div id="byokPanel" class="panel hidden">
       <p class="sub" style="margin:0 0 14px;">
-        This deployment asks each signed-in user to <b style="color:var(--text);">bring their own</b>
-        Anthropic/Gemini API key for Exact mode. Your key is stored only in this browser
-        (localStorage) — it's sent to AIRI with each Exact request and used for that one
-        provider call only. AIRI never stores it server-side or logs it.
+        Two features use a provider key you <b style="color:var(--text);">bring yourself</b> rather
+        than one AIRI holds: Exact mode here (unless this deployment is in testing mode, which uses
+        AIRI's own shared key instead), and the optional Live AI Guide in a project's Governance tab
+        (Workspaces) — which always uses your own key, even in testing mode, since it's a real
+        generation call rather than a free check. Your key is stored only in this browser
+        (localStorage) — it's sent to AIRI only with the one request that needs it, for that one
+        provider call. AIRI never stores it server-side or logs it.
       </p>
       <div class="byok-row">
         <label for="byokAnthropicInput" style="margin:0;">Anthropic API key</label>
@@ -946,27 +952,31 @@
 
     authPanel.classList.toggle("hidden", !(inExact && !signedIn));
 
+    // "Manage keys" is reachable whenever signed in, regardless of which
+    // flavor is selected or whether this deployment is in testing mode —
+    // BYOK isn't just an Exact-mode thing any more. The optional Live AI
+    // Guide feature (Workspaces → a project's Governance tab) always
+    // needs your own key, even when Exact itself doesn't (testing mode),
+    // and even when the user isn't looking at Exact at all (Standard
+    // flavor). Gating this button on `inExact`/`!testMode`, like before
+    // this feature existed, would leave those users with no way to open
+    // this panel from here at all.
+    manageKeysBtn.classList.toggle("hidden", !signedIn || testMode === null);
+    if (!signedIn) byokPanelOpen = false;
+
+    if (byokPanelOpen) {
+      openByokInputs();
+      byokPanelEl.classList.remove("hidden");
+    } else {
+      byokPanelEl.classList.add("hidden");
+    }
+
     if (!inExact || !signedIn || testMode === null) {
       testModeNoteEl.classList.add("hidden");
-      byokPanelEl.classList.add("hidden");
-      manageKeysBtn.classList.add("hidden");
       return;
     }
 
-    if (testMode) {
-      testModeNoteEl.classList.remove("hidden");
-      byokPanelEl.classList.add("hidden");
-      manageKeysBtn.classList.add("hidden");
-    } else {
-      testModeNoteEl.classList.add("hidden");
-      manageKeysBtn.classList.remove("hidden");
-      if (byokPanelOpen) {
-        openByokInputs();
-        byokPanelEl.classList.remove("hidden");
-      } else {
-        byokPanelEl.classList.add("hidden");
-      }
-    }
+    testModeNoteEl.classList.toggle("hidden", !testMode);
   }
 
   function setFlavor(flavor) {
