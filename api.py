@@ -414,6 +414,32 @@ class NoteBody(BaseModel):
     body: str = ""
 
 
+class CoeRiskBody(BaseModel):
+    """The Frame gate's risk form — see ws.RISK_FACTORS. A full replace
+    (like AdminThemeBody/AdminVisibilityBody): the form always submits
+    all 4 answers together, since the tier isn't meaningful with a gap
+    in it."""
+
+    risk_factors: Dict[str, str] = Field(default_factory=dict)
+    note: str = ""
+
+
+class CoeGateBody(BaseModel):
+    status: str = ws.DEFAULT_GATE_STATUS
+    note: str = ""
+
+
+class CoeRolesBody(BaseModel):
+    """One key per ws.ACCOUNTABLE_ROLES; a missing/null value clears that
+    role back to "defaults to the workspace admin" rather than leaving
+    the previous assignment in place — same full-replace convention as
+    the rest of this feature."""
+
+    business_owner: Optional[int] = None
+    technical_owner: Optional[int] = None
+    governance_owner: Optional[int] = None
+
+
 class ArchetypeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     volume: int = Field(ge=0)
@@ -1034,6 +1060,104 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
     _require_app_key_confirmed(user_id, body.app_key)
     db.delete_project(project_id)
     return {"deleted": True}
+
+
+# --- CoE governance (Phase 6a — a `coe_initiative` project's risk tier, ---
+# --- 6 gates, and 3 accountable roles; see airi/workspaces.py) ---
+#
+# Deliberately open to any active workspace member, not admin-only, for
+# the risk form and gate updates — same level as notes/tool runs
+# ("working inside the project"), because the whole point of "breeze to
+# use" is that whoever is actually doing the work can answer the gate's
+# question without needing the workspace admin to do it for them. Role
+# *assignment* (who holds business/technical/governance owner) stays
+# admin-only, same bucket as changing a project's title or type.
+
+
+@app.get("/projects/coe-catalog")
+def coe_catalog():
+    """Everything the frontend needs to render the risk form and the 6
+    gates without hardcoding any of it — same convention as
+    /projects/tech-stack-categories and /theme-catalog."""
+    return {
+        "risk_factors": ws.RISK_FACTORS,
+        "risk_tiers": ws.RISK_TIERS,
+        "gates": ws.COE_GATES,
+        "roles": ws.ACCOUNTABLE_ROLES,
+        "gate_statuses": ws.GATE_STATUSES,
+        "enforcement_lookup": ws.ENFORCEMENT_LOOKUP,
+    }
+
+
+@app.put("/projects/{project_id}/coe-risk")
+def set_project_coe_risk(project_id: int, body: CoeRiskBody, authorization: Optional[str] = Header(default=None)):
+    """The Frame gate's risk form. Any active member can (re-)answer it —
+    recomputing the tier is meant to be cheap and frequent (see "tier is
+    not fixed at intake" in the plan doc), not a one-time admin action."""
+    user_id = _require_user_id(authorization)
+    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    try:
+        risk_factors = ws.validate_risk_answers(body.risk_factors)
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    note = (body.note or "").strip()[: ws.RISK_NOTE_MAX_CHARS]
+    tier, explanation = ws.compute_risk_tier(risk_factors)
+    previous_tier = project_row.get("risk_tier") or ""
+    updated = db.set_project_risk(project_id, tier, risk_factors, explanation)
+    db.create_coe_event(
+        project_id, None, "risk_set", user_id,
+        from_value=previous_tier, to_value=tier, note=note,
+    )
+    return updated
+
+
+@app.put("/projects/{project_id}/coe-roles")
+def set_project_coe_roles(project_id: int, body: CoeRolesBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only — same bucket as update_project."""
+    user_id = _require_user_id(authorization)
+    _require_project_admin(project_id, user_id)
+    try:
+        coe_roles = ws.validate_coe_roles(body.model_dump())
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    updated = db.set_project_roles(project_id, coe_roles)
+    for role_key, new_user_id in coe_roles.items():
+        db.create_coe_event(
+            project_id, None, "role_assigned", user_id,
+            from_value="", to_value=(str(new_user_id) if new_user_id else ""), note=role_key,
+        )
+    return updated
+
+
+@app.put("/projects/{project_id}/coe-phases/{gate_key}")
+def set_project_coe_gate(project_id: int, gate_key: str, body: CoeGateBody, authorization: Optional[str] = Header(default=None)):
+    """Any active member. Merges this one gate's new status/note into the
+    project's existing coe_phase_state (a full-replace field — see
+    db.set_project_gate_state) and appends one ledger row regardless of
+    whether anything actually changed, so "I looked at this and left it
+    as-is" is still on the record."""
+    user_id = _require_user_id(authorization)
+    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    try:
+        gate_key, status, note = ws.validate_gate_update(gate_key, body.status, body.note)
+    except ws.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    phase_state = dict(project_row.get("coe_phase_state") or {})
+    previous_status = (phase_state.get(gate_key) or {}).get("status", "")
+    phase_state[gate_key] = {"status": status, "note": note, "updated_at": datetime.now(timezone.utc).isoformat()}
+    updated = db.set_project_gate_state(project_id, phase_state)
+    db.create_coe_event(
+        project_id, gate_key, "gate_status_changed", user_id,
+        from_value=previous_status, to_value=status, note=note,
+    )
+    return updated
+
+
+@app.get("/projects/{project_id}/coe-ledger")
+def list_project_coe_ledger(project_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = _require_user_id(authorization)
+    _get_accessible_project(project_id, user_id)
+    return db.list_coe_events(project_id)
 
 
 # --- Saved tool runs inside a project (Phase 2 — see docs/WORKSPACES.md) ---

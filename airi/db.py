@@ -431,7 +431,11 @@ def get_active_memberships_by_email(email: str) -> List[dict]:
 
 # ---------- projects ----------
 
-_PROJECT_FIELDS = "id, workspace_id, title, description, tech_stack, project_type, created_at, updated_at"
+_PROJECT_FIELDS = (
+    "id, workspace_id, title, description, tech_stack, project_type, "
+    "risk_tier, risk_factors, risk_explanation, coe_roles, coe_phase_state, "
+    "created_at, updated_at"
+)
 
 
 def create_project(workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str) -> dict:
@@ -564,3 +568,87 @@ def delete_note(note_id: int) -> bool:
     with _cursor() as cur:
         cur.execute("DELETE FROM project_notes WHERE id = %s", (note_id,))
         return cur.rowcount > 0
+
+
+# ---------- CoE governance (workspaces feature, Phase 6a) ----------
+#
+# risk_tier/risk_factors/risk_explanation/coe_roles/coe_phase_state on
+# `projects` are current-state caches (see sql/008_coe_governance.sql) —
+# each setter here does a full replace of its one field, same convention
+# as update_project. coe_control_events below is the append-only ledger
+# those overwrites would otherwise lose history from.
+
+def set_project_risk(project_id: int, risk_tier: str, risk_factors: Dict[str, str], risk_explanation: str) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects SET risk_tier = %s, risk_factors = %s, risk_explanation = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (risk_tier, Json(risk_factors), risk_explanation, project_id),
+        )
+        return cur.fetchone()
+
+
+def set_project_roles(project_id: int, coe_roles: Dict[str, Any]) -> Optional[dict]:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects SET coe_roles = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (Json(coe_roles), project_id),
+        )
+        return cur.fetchone()
+
+
+def set_project_gate_state(project_id: int, coe_phase_state: Dict[str, Any]) -> Optional[dict]:
+    """Takes the FULL new coe_phase_state dict (the caller merges the one
+    changed gate into what it already read) — same full-replace shape as
+    tech_stack, so there's no partial-JSONB-update logic to get wrong."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects SET coe_phase_state = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (Json(coe_phase_state), project_id),
+        )
+        return cur.fetchone()
+
+
+_COE_EVENT_FIELDS = "id, project_id, gate_key, event_type, actor_user_id, from_value, to_value, note, created_at"
+
+
+def create_coe_event(
+    project_id: int,
+    gate_key: Optional[str],
+    event_type: str,
+    actor_user_id: Optional[int],
+    from_value: str,
+    to_value: str,
+    note: str,
+) -> dict:
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO coe_control_events (project_id, gate_key, event_type, actor_user_id, from_value, to_value, note)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING {_COE_EVENT_FIELDS}
+            """,
+            (project_id, gate_key, event_type, actor_user_id, from_value, to_value, note),
+        )
+        return cur.fetchone()
+
+
+def list_coe_events(project_id: int) -> List[dict]:
+    """Most recent first — same convention as list_notes."""
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT {_COE_EVENT_FIELDS} FROM coe_control_events WHERE project_id = %s ORDER BY created_at DESC",
+            (project_id,),
+        )
+        return cur.fetchall()

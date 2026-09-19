@@ -185,6 +185,7 @@
   .type-api_request { background: rgba(110,168,254,0.15); color: var(--accent); }
   .type-license_request { background: rgba(62,207,142,0.15); color: var(--safe); }
   .type-sdlc_request { background: rgba(242,184,75,0.15); color: var(--warning); }
+  .type-coe_initiative { background: rgba(155,126,242,0.15); color: #9b7ef2; }
   .project-type-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 2px; }
   .project-type-row label {
     display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
@@ -631,11 +632,15 @@
   let currentWorkspace = null; // full detail object, or null when on the list view
   let techStackCategories = {};
   let projectTypes = {};
-  const PROJECT_TYPE_FALLBACK_ORDER = ["api_request", "license_request", "sdlc_request"];
+  let coeCatalog = { risk_factors: {}, risk_tiers: {}, gates: [], roles: {}, gate_statuses: [], enforcement_lookup: {} };
+  const PROJECT_TYPE_FALLBACK_ORDER = ["api_request", "license_request", "sdlc_request", "coe_initiative"];
   const WIZARD_LINKS = {
     license_request: { href: "license-wizard.html", label: "License request wizard" },
     sdlc_request: { href: "sdlc-wizard.html", label: "SDLC tool request wizard" },
   };
+  const RISK_TIER_COLOR = { low: "var(--safe)", standard: "var(--warning)", high: "var(--exceeded)" };
+  const GATE_STATUS_COLOR = { not_started: "var(--muted)", in_progress: "var(--warning)", cleared: "var(--safe)", flagged: "var(--exceeded)" };
+  const GATE_STATUS_LABEL = { not_started: "Not started", in_progress: "In progress", cleared: "Cleared", flagged: "Flagged" };
   let modelsData = [];
   let testMode = null; // null = not loaded yet; true/false once GET /config resolves
 
@@ -1287,7 +1292,7 @@
     const meta = projectTypes[type];
     if (meta) return meta.label;
     // Fallback labels if /projects/project-types hasn't loaded yet.
-    return { api_request: "API request", license_request: "License request", sdlc_request: "SDLC tool request" }[type] || type;
+    return { api_request: "API request", license_request: "License request", sdlc_request: "SDLC tool request", coe_initiative: "CoE initiative" }[type] || type;
   }
 
   function projectTypeRadiosHtml(idPrefix, selected, disabled) {
@@ -1362,13 +1367,18 @@
     for (const p of projects) {
       const projectType = p.project_type || "api_request";
       const isApiProject = projectType === "api_request";
+      const isCoeInitiative = projectType === "coe_initiative";
       const row = document.createElement("div");
       row.className = "project-row";
       const chip = stackSummary(p.tech_stack);
+      const riskChip = isCoeInitiative && p.risk_tier
+        ? `<span class="stack-chip" style="color:${RISK_TIER_COLOR[p.risk_tier] || "var(--muted)"};">${escapeHtml((coeCatalog.risk_tiers[p.risk_tier] || {}).label || p.risk_tier)} risk</span>`
+        : "";
       row.innerHTML = `
         <div class="project-summary">
           <div>
             <b>${escapeHtml(p.title)}</b><span class="type-badge type-${projectType}">${escapeHtml(projectTypeLabel(projectType))}</span>
+            ${riskChip}
             ${chip ? `<div class="stack-chip">${escapeHtml(chip)}</div>` : ""}
           </div>
           <span class="link-btn">Edit ▾</span>
@@ -1378,14 +1388,17 @@
       body.className = "project-body hidden";
       const idPrefix = `proj-${p.id}`;
       // The 4 API-traffic tools (+ their Dashboard rollup) only apply to
-      // an "api_request" project — the other two types get a single
-      // "Wizard" tab pointing at the dedicated wizard page instead.
+      // an "api_request" project; "coe_initiative" gets a Governance tab
+      // built right here (not a link out); the two older demo-wizard
+      // types get a single "Wizard" tab pointing at the dedicated page.
       const toolTabsHtml = isApiProject ? `
           <button type="button" class="proj-tab-btn" data-tab="analyze">Standard</button>
           <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
           <button type="button" class="proj-tab-btn" data-tab="project">Traffic</button>
           <button type="button" class="proj-tab-btn" data-tab="report">Load Test</button>
           <button type="button" class="proj-tab-btn" data-tab="dashboard">Dashboard</button>
+        ` : isCoeInitiative ? `
+          <button type="button" class="proj-tab-btn" data-tab="governance">Governance</button>
         ` : `
           <button type="button" class="proj-tab-btn" data-tab="wizard">Wizard</button>
         `;
@@ -1395,6 +1408,8 @@
         <div class="proj-tab-panel hidden" data-panel="project"></div>
         <div class="proj-tab-panel hidden" data-panel="report"></div>
         <div class="proj-tab-panel hidden" data-panel="dashboard"></div>
+        ` : isCoeInitiative ? `
+        <div class="proj-tab-panel hidden" data-panel="governance"></div>
         ` : `
         <div class="proj-tab-panel hidden" data-panel="wizard">
           <div class="tab-note">${wizardNoteHtml(projectType)}</div>
@@ -1495,6 +1510,7 @@
               if (tab === "dashboard") renderDashboardPanel(p, panel);
               else if (tab === "notes") renderNotesPanel(p, panel);
               else if (tab === "actions") renderActionsPanel(p, panel);
+              else if (tab === "governance") renderGovernancePanel(p, panel, isAdmin);
               else renderToolPanel(tab, p, panel);
             }
           }
@@ -1917,6 +1933,258 @@
     });
   }
 
+  // ---------- Governance tab (coe_initiative projects) ----------
+  //
+  // Breeze-first: a brand-new initiative shows just the 4-question risk
+  // form. Answering it once unlocks the 6 gates and the accountable-role
+  // row — nothing else to set up. All current state (risk_tier/
+  // risk_factors/risk_explanation/coe_roles/coe_phase_state) already
+  // rides on the project object itself (see airi/db.py:
+  // _PROJECT_FIELDS), so this panel never needs its own GET on open —
+  // only the ledger (History, below) does, and only when expanded.
+
+  function riskFactorPillsHtml(idPrefix, factorKey, factor, selectedValue) {
+    return `
+      <div class="field">
+        <label>${escapeHtml(factor.label)}</label>
+        <div class="sub" style="margin:2px 0 6px;">${escapeHtml(factor.question)}</div>
+        <div class="project-type-row">
+          ${factor.options.map((opt) => `
+            <label class="${opt.value === selectedValue ? "checked" : ""}">
+              <input type="radio" name="${idPrefix}-${factorKey}" value="${opt.value}"${opt.value === selectedValue ? " checked" : ""} />
+              ${escapeHtml(opt.label)}
+            </label>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function wireRiskPillRow(rowEl) {
+    rowEl.querySelectorAll('input[type="radio"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        rowEl.querySelectorAll("label").forEach((label) => {
+          label.classList.toggle("checked", label.querySelector("input") === input);
+        });
+      });
+    });
+  }
+
+  function riskFormHtml(idPrefix, existingFactors) {
+    const factors = coeCatalog.risk_factors || {};
+    const rows = Object.keys(factors).map((key) => riskFactorPillsHtml(idPrefix, key, factors[key], (existingFactors || {})[key])).join("");
+    return `
+      <p class="sub">Four quick questions decide how much process this needs — most initiatives come out Low and need almost nothing beyond this.</p>
+      ${rows}
+      <div class="row"><div><button type="button" id="${idPrefix}-submit-btn" style="width:100%;">See my risk level</button></div></div>
+      <div class="error hidden" id="${idPrefix}-error"></div>
+    `;
+  }
+
+  function wireRiskForm(project, containerEl, idPrefix, onDone) {
+    containerEl.querySelectorAll(".project-type-row").forEach(wireRiskPillRow);
+    document.getElementById(`${idPrefix}-submit-btn`).addEventListener("click", async () => {
+      const errorEl = document.getElementById(`${idPrefix}-error`);
+      errorEl.classList.add("hidden");
+      const risk_factors = {};
+      for (const key of Object.keys(coeCatalog.risk_factors || {})) {
+        const checked = containerEl.querySelector(`input[name="${idPrefix}-${key}"]:checked`);
+        if (checked) risk_factors[key] = checked.value;
+      }
+      try {
+        const updated = await apiFetch(`/projects/${project.id}/coe-risk`, { method: "PUT", body: JSON.stringify({ risk_factors }) });
+        Object.assign(project, updated);
+        onDone();
+      } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      }
+    });
+  }
+
+  function riskBannerHtml(project) {
+    const tierMeta = coeCatalog.risk_tiers[project.risk_tier] || { label: project.risk_tier };
+    const color = RISK_TIER_COLOR[project.risk_tier] || "var(--muted)";
+    return `
+      <div class="history-entry" style="margin-top:0;">
+        <div class="history-summary" data-retake-toggle style="cursor:pointer;">
+          <span><b style="color:${color};">${escapeHtml(tierMeta.label)} risk</b> — ${escapeHtml(project.risk_explanation || "")}</span>
+          <span class="link-btn">Retake ▾</span>
+        </div>
+        <div class="history-detail hidden" id="proj-${project.id}-retake" style="margin-top:10px;"></div>
+      </div>
+    `;
+  }
+
+  function gateEnforcementLabel(tier, gateKey) {
+    const level = ((coeCatalog.enforcement_lookup || {})[tier] || {})[gateKey];
+    return { advisory: "Advisory", required_justification: "Needs a reason to override", mandatory: "Mandatory" }[level] || "";
+  }
+
+  function gateRowHtml(project, gate) {
+    const state = (project.coe_phase_state || {})[gate.key] || {};
+    const status = state.status || "not_started";
+    const roleLabel = (coeCatalog.roles[gate.accountable_role] || {}).label || gate.accountable_role;
+    const enforcement = gateEnforcementLabel(project.risk_tier, gate.key);
+    return `
+      <div class="history-entry" data-gate-key="${gate.key}">
+        <div class="history-summary">
+          <span>
+            <b>${gate.order}. ${escapeHtml(gate.label)}</b>
+            <span class="stack-chip" style="color:${GATE_STATUS_COLOR[status]};">${GATE_STATUS_LABEL[status]}</span>
+          </span>
+          <span class="link-btn">Open ▾</span>
+        </div>
+        <div class="history-detail hidden" style="margin-top:10px;">
+          <p class="sub" style="margin-top:0;">${escapeHtml(gate.guide_question)}</p>
+          <p class="sub">Accountable: <b>${escapeHtml(roleLabel)}</b>${enforcement ? ` · ${escapeHtml(enforcement)}` : ""}</p>
+          <div class="field">
+            <label>Status</label>
+            <select data-gate-status>
+              ${(coeCatalog.gate_statuses || []).map((s) => `<option value="${s}"${s === status ? " selected" : ""}>${GATE_STATUS_LABEL[s] || s}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label>Note ${status === "flagged" ? '<span class="required-mark">*</span>' : "(optional)"}</label>
+            <textarea data-gate-note placeholder="Why, or what's blocking...">${escapeHtml(state.note || "")}</textarea>
+          </div>
+          <div class="row"><div><button type="button" data-gate-save style="width:100%;">Save</button></div></div>
+          <div class="error hidden" data-gate-error></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function gatesListHtml(project) {
+    return (coeCatalog.gates || []).map((gate) => gateRowHtml(project, gate)).join("");
+  }
+
+  function wireGates(project, panelEl, rerender) {
+    panelEl.querySelectorAll("[data-gate-key]").forEach((rowEl) => {
+      const gateKey = rowEl.dataset.gateKey;
+      rowEl.querySelector(".history-summary").addEventListener("click", () => {
+        rowEl.querySelector(".history-detail").classList.toggle("hidden");
+      });
+      rowEl.querySelector("[data-gate-save]").addEventListener("click", async () => {
+        const errorEl = rowEl.querySelector("[data-gate-error]");
+        errorEl.classList.add("hidden");
+        const status = rowEl.querySelector("[data-gate-status]").value;
+        const note = rowEl.querySelector("[data-gate-note]").value;
+        try {
+          const updated = await apiFetch(`/projects/${project.id}/coe-phases/${gateKey}`, { method: "PUT", body: JSON.stringify({ status, note }) });
+          Object.assign(project, updated);
+          rerender();
+        } catch (e) {
+          errorEl.textContent = e.message;
+          errorEl.classList.remove("hidden");
+        }
+      });
+    });
+  }
+
+  function memberOptionsHtml(selectedUserId) {
+    const admin = currentWorkspace.owner_user_id;
+    const members = (currentWorkspace.members || []).filter((m) => m.user_id && m.status !== "disabled");
+    const opts = [`<option value=""${!selectedUserId ? " selected" : ""}>(workspace admin)</option>`];
+    for (const m of members) {
+      if (m.user_id === admin) continue; // admin is already the default option
+      opts.push(`<option value="${m.user_id}"${m.user_id === selectedUserId ? " selected" : ""}>${escapeHtml(m.email)}</option>`);
+    }
+    return opts.join("");
+  }
+
+  function rolesHtml(project) {
+    const coeRoles = project.coe_roles || {};
+    return `
+      <h3 style="margin-top:18px;">Who's accountable</h3>
+      <p class="sub">Unassigned roles default to the workspace admin — nothing to set up for a solo workspace.</p>
+      ${Object.keys(coeCatalog.roles || {}).map((roleKey) => `
+        <div class="field">
+          <label>${escapeHtml((coeCatalog.roles[roleKey] || {}).label || roleKey)}</label>
+          <select data-role-key="${roleKey}">${memberOptionsHtml(coeRoles[roleKey])}</select>
+        </div>
+      `).join("")}
+      <div class="row"><div><button type="button" id="proj-${project.id}-roles-save" style="width:100%;">Save roles</button></div></div>
+      <div class="error hidden" id="proj-${project.id}-roles-error"></div>
+    `;
+  }
+
+  function wireRoles(project, panelEl) {
+    const errorEl = document.getElementById(`proj-${project.id}-roles-error`);
+    document.getElementById(`proj-${project.id}-roles-save`).addEventListener("click", async () => {
+      errorEl.classList.add("hidden");
+      const payload = {};
+      panelEl.querySelectorAll("[data-role-key]").forEach((sel) => {
+        payload[sel.dataset.roleKey] = sel.value ? Number(sel.value) : null;
+      });
+      try {
+        const updated = await apiFetch(`/projects/${project.id}/coe-roles`, { method: "PUT", body: JSON.stringify(payload) });
+        Object.assign(project, updated);
+      } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      }
+    });
+  }
+
+  function ledgerRowHtml(ev) {
+    const what = { risk_set: "Risk set", gate_status_changed: `Gate "${ev.gate_key}"`, role_assigned: `Role "${ev.note}" assigned` }[ev.event_type] || ev.event_type;
+    const change = ev.event_type === "role_assigned" ? "" : ` ${escapeHtml(ev.from_value || "—")} → ${escapeHtml(ev.to_value || "—")}`;
+    return `
+      <div class="history-entry" style="margin-top:6px;">
+        <span class="stack-chip">${new Date(ev.created_at).toLocaleString()}</span>
+        ${escapeHtml(what)}${change}
+        ${ev.note && ev.event_type !== "role_assigned" ? `<div class="sub" style="margin-top:4px;">${escapeHtml(ev.note)}</div>` : ""}
+      </div>
+    `;
+  }
+
+  function wireLedger(project, panelEl) {
+    const toggle = panelEl.querySelector("[data-ledger-toggle]");
+    const listEl = panelEl.querySelector("[data-ledger-list]");
+    toggle.addEventListener("click", async () => {
+      listEl.classList.toggle("hidden");
+      const isVisible = !listEl.classList.contains("hidden");
+      if (!isVisible || listEl.dataset.loaded) return;
+      listEl.dataset.loaded = "1";
+      listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+      try {
+        const events = await apiFetch(`/projects/${project.id}/coe-ledger`);
+        listEl.innerHTML = events.length ? events.map(ledgerRowHtml).join("") : `<div class="empty-state">Nothing recorded yet.</div>`;
+      } catch (e) {
+        listEl.innerHTML = `<div class="empty-state">Could not load history.</div>`;
+      }
+    });
+  }
+
+  function renderGovernancePanel(project, panelEl, isAdmin) {
+    const idPrefix = `proj-${project.id}-risk`;
+    if (!project.risk_tier) {
+      panelEl.innerHTML = riskFormHtml(idPrefix, project.risk_factors);
+      wireRiskForm(project, panelEl, idPrefix, () => renderGovernancePanel(project, panelEl, isAdmin));
+      return;
+    }
+    panelEl.innerHTML = `
+      ${riskBannerHtml(project)}
+      <h3 style="margin-top:18px;">The 6 gates</h3>
+      ${gatesListHtml(project)}
+      ${isAdmin ? rolesHtml(project) : ""}
+      <h3 style="margin-top:18px;"><span class="link-btn" data-ledger-toggle>History ▾</span></h3>
+      <div class="hidden" data-ledger-list></div>
+    `;
+    const retakeDetail = document.getElementById(`proj-${project.id}-retake`);
+    panelEl.querySelector("[data-retake-toggle]").addEventListener("click", () => {
+      retakeDetail.classList.toggle("hidden");
+      if (retakeDetail.dataset.rendered) return;
+      retakeDetail.dataset.rendered = "1";
+      retakeDetail.innerHTML = riskFormHtml(`${idPrefix}-retake`, project.risk_factors);
+      wireRiskForm(project, retakeDetail, `${idPrefix}-retake`, () => renderGovernancePanel(project, panelEl, isAdmin));
+    });
+    wireGates(project, panelEl, () => renderGovernancePanel(project, panelEl, isAdmin));
+    if (isAdmin) wireRoles(project, panelEl);
+    wireLedger(project, panelEl);
+  }
+
   async function renderActionsPanel(project, panelEl) {
     panelEl.innerHTML = `<div class="empty-state">Loading…</div>`;
     try {
@@ -2277,6 +2545,7 @@
 
     techStackCategories = await apiFetch("/projects/tech-stack-categories").catch(() => ({}));
     projectTypes = await apiFetch("/projects/project-types").catch(() => ({}));
+    coeCatalog = await apiFetch("/projects/coe-catalog").catch(() => coeCatalog);
     renderNewProjectForm();
 
     const profile = await apiFetch("/profile").catch(() => ({ has_app_key: false }));

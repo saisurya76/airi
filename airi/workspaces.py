@@ -16,7 +16,7 @@ has no notion of users, workspaces, or projects.
 import hashlib
 import re
 import secrets
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _APP_KEY_RE = re.compile(r"^\d{4}$")
@@ -174,6 +174,7 @@ PROJECT_TYPES = {
     "api_request": {"label": "API request"},
     "license_request": {"label": "License request"},
     "sdlc_request": {"label": "SDLC tool request"},
+    "coe_initiative": {"label": "CoE initiative"},
 }
 
 DEFAULT_PROJECT_TYPE = "api_request"
@@ -205,3 +206,261 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
     project_type = validate_project_type(data.get("project_type"))
     tech_stack = validate_tech_stack(data.get("tech_stack") or {}, require_full=(project_type == "api_request"))
     return title, description, tech_stack, project_type
+
+
+# ---------- projects: CoE governance ----------
+#
+# The risk-tiered model from the "CoE Phases -> AIRI Workspaces Projects"
+# plan doc, built as a `coe_initiative` project's data: one risk tier
+# (computed from 4 factors, worst-factor-wins, never averaged), 3
+# accountable roles (not a 7-column enterprise RACI), and 6 gates (not
+# 18 checklist steps) — designed to need almost no setup for a low-risk
+# initiative and to get genuinely hard to bypass for a high-risk one.
+#
+# Deliberately NOT identity-enforced yet (a mandatory gate doesn't check
+# that the caller marking it "cleared" actually holds the accountable
+# role) — that's a real next step, scoped out here so the core flow
+# (risk form -> 6 gates -> ledger) ships and gets used first. Every
+# write still goes through the ledger, so nothing is silently lost
+# while that's true.
+
+RISK_FACTORS = {
+    "data": {
+        "label": "Data",
+        "question": "Does this touch anything beyond public or internal-only information?",
+        "options": [
+            {"value": "public_internal", "label": "Public or internal-only", "score": 0},
+            {"value": "confidential", "label": "Confidential, but not personal or regulated", "score": 1},
+            {"value": "regulated", "label": "Personal, financial, health, or otherwise regulated", "score": 2},
+        ],
+    },
+    "autonomy": {
+        "label": "Autonomy",
+        "question": "Does it just produce output a human reads, does a human approve each action, or does it act on its own?",
+        "options": [
+            {"value": "advisory", "label": "Advisory — a human reads the output", "score": 0},
+            {"value": "human_in_loop", "label": "A human approves each action", "score": 1},
+            {"value": "autonomous", "label": "Acts on its own (sends, changes, spends)", "score": 2},
+        ],
+    },
+    "exposure": {
+        "label": "Exposure",
+        "question": "Who can reach it?",
+        "options": [
+            {"value": "internal", "label": "Internal users only", "score": 0},
+            {"value": "external", "label": "External / customer-facing", "score": 1},
+        ],
+    },
+    "reversibility": {
+        "label": "Reversibility",
+        "question": "If it's wrong, how bad is that?",
+        "options": [
+            {"value": "easily_reversible", "label": "Quietly fixable", "score": 0},
+            {"value": "hard_to_reverse", "label": "Costly or hard to undo", "score": 2},
+        ],
+    },
+}
+
+RISK_TIERS = {
+    "low": {"label": "Low"},
+    "standard": {"label": "Standard"},
+    "high": {"label": "High"},
+}
+
+_SCORE_TO_TIER = {0: "low", 1: "standard", 2: "high"}
+
+ACCOUNTABLE_ROLES = {
+    "business_owner": {
+        "label": "Business Owner",
+        "description": "Accountable for whether this should exist and whether it's delivering value.",
+    },
+    "technical_owner": {
+        "label": "Technical Owner",
+        "description": "Accountable for whether it works, safely, at an acceptable quality and cost.",
+    },
+    "governance_owner": {
+        "label": "Governance Owner",
+        "description": "Accountable for whether it meets CoE standards — approved models, architecture, data classification, risk controls.",
+    },
+}
+
+# key, order, label, the question the assistant asks at that gate, and
+# which of the 3 roles is accountable for it. "run" is a standing
+# domain, not a one-time gate, but is represented the same way (a
+# status that can be revisited any time) for simplicity.
+COE_GATES = [
+    {
+        "key": "frame",
+        "order": 1,
+        "label": "Frame",
+        "guide_question": "Is this a real problem, and who owns the outcome?",
+        "accountable_role": "business_owner",
+    },
+    {
+        "key": "design",
+        "order": 2,
+        "label": "Design",
+        "guide_question": "Does this meet the model, architecture, and data standards?",
+        "accountable_role": "technical_owner",
+    },
+    {
+        "key": "verify",
+        "order": 3,
+        "label": "Verify",
+        "guide_question": "Does it work, safely, at the required bar?",
+        "accountable_role": "technical_owner",
+    },
+    {
+        "key": "release",
+        "order": 4,
+        "label": "Release",
+        "guide_question": "Are we allowed to put real users or production traffic on it?",
+        "accountable_role": "governance_owner",
+    },
+    {
+        "key": "run",
+        "order": 5,
+        "label": "Run",
+        "guide_question": "Is it still healthy, and still worth what it costs?",
+        "accountable_role": "technical_owner",
+    },
+    {
+        "key": "evolve_retire",
+        "order": 6,
+        "label": "Evolve or retire",
+        "guide_question": "Does a change need to re-clear earlier gates, or is it time to shut down?",
+        "accountable_role": "governance_owner",
+    },
+]
+
+COE_GATE_KEYS = tuple(g["key"] for g in COE_GATES)
+COE_GATES_BY_KEY = {g["key"]: g for g in COE_GATES}
+
+GATE_STATUSES = ("not_started", "in_progress", "cleared", "flagged")
+DEFAULT_GATE_STATUS = "not_started"
+
+# {tier -> {gate_key -> enforcement level}}. Low is always advisory —
+# Guide and Ledger still run, nothing blocks. Levels beyond this table
+# are read by the frontend/future agent to size the Guide prompt and
+# decide whether an override needs a reason; see COE_CONTROLS-style
+# reasoning in the plan doc's "Control state machine" section for the
+# 3 levels themselves (advisory / required_justification / mandatory).
+ENFORCEMENT_LOOKUP = {
+    "low": {key: "advisory" for key in COE_GATE_KEYS},
+    "standard": {
+        "frame": "advisory",
+        "design": "required_justification",
+        "verify": "advisory",
+        "release": "required_justification",
+        "run": "advisory",
+        "evolve_retire": "advisory",
+    },
+    "high": {
+        "frame": "advisory",
+        "design": "mandatory",
+        "verify": "mandatory",
+        "release": "mandatory",
+        "run": "required_justification",
+        "evolve_retire": "required_justification",
+    },
+}
+
+RISK_NOTE_MAX_CHARS = 2000
+GATE_NOTE_MAX_CHARS = 2000
+
+
+def enforcement_level(tier: str, gate_key: str) -> str:
+    """Raises WorkspaceError for an unknown tier/gate — callers always
+    pass values already validated by compute_risk_tier/gate key
+    membership, so this only fires on a real bug."""
+    if tier not in ENFORCEMENT_LOOKUP:
+        raise WorkspaceError(f"Unknown risk tier: {tier!r}.")
+    if gate_key not in COE_GATE_KEYS:
+        raise WorkspaceError(f"Unknown gate: {gate_key!r}.")
+    return ENFORCEMENT_LOOKUP[tier][gate_key]
+
+
+def validate_risk_answers(data: Dict[str, Any]) -> Dict[str, str]:
+    """Takes {factor_key: option_value} for all 4 RISK_FACTORS keys,
+    returns it unchanged (already validated) — a missing key or unknown
+    value raises WorkspaceError naming which factor. All 4 are required;
+    unlike tech stack there's no "optional" factor here — the tier isn't
+    meaningful with a gap in it."""
+    result = {}
+    for factor_key, factor in RISK_FACTORS.items():
+        value = data.get(factor_key)
+        if not value:
+            raise WorkspaceError(f"'{factor['label']}' is required.")
+        known_values = {opt["value"] for opt in factor["options"]}
+        if value not in known_values:
+            raise WorkspaceError(f"Unknown value for '{factor['label']}': {value!r}.")
+        result[factor_key] = value
+    return result
+
+
+def compute_risk_tier(risk_factors: Dict[str, str]) -> Tuple[str, str]:
+    """Returns (tier, explanation). Worst-factor-wins: the tier is set by
+    the single highest-scoring answer, not an average of the 4 — one
+    serious factor is enough to make the whole initiative High, the same
+    way a single failed safety check outweighs three passing ones. That
+    also makes the tier self-explaining: the explanation always names
+    the one factor that caused it, so "High" is never a bare label.
+    Assumes risk_factors has already passed validate_risk_answers."""
+    best_score = -1
+    best_factor_key = None
+    best_option_label = None
+    for factor_key, value in risk_factors.items():
+        factor = RISK_FACTORS[factor_key]
+        option = next(opt for opt in factor["options"] if opt["value"] == value)
+        if option["score"] > best_score:
+            best_score = option["score"]
+            best_factor_key = factor_key
+            best_option_label = option["label"]
+    tier = _SCORE_TO_TIER[max(best_score, 0)]
+    factor_label = RISK_FACTORS[best_factor_key]["label"]
+    explanation = f"{RISK_TIERS[tier]['label']}, because of {factor_label.lower()}: {best_option_label.lower()}."
+    return tier, explanation
+
+
+def validate_gate_update(gate_key: str, status: str, note: str) -> Tuple[str, str, str]:
+    """Returns (gate_key, status, note) trimmed/validated. A 'flagged'
+    status always requires a non-empty note — that's the override
+    reason, the one piece of the Ledger that's never optional."""
+    if gate_key not in COE_GATE_KEYS:
+        raise WorkspaceError(f"Unknown gate: {gate_key!r}.")
+    if status not in GATE_STATUSES:
+        raise WorkspaceError(f"Unknown gate status: {status!r}.")
+    note = (note or "").strip()
+    if len(note) > GATE_NOTE_MAX_CHARS:
+        raise WorkspaceError(f"Note is too long (max {GATE_NOTE_MAX_CHARS} characters).")
+    if status == "flagged" and not note:
+        raise WorkspaceError("Flagging a gate needs a reason — add a short note.")
+    return gate_key, status, note
+
+
+def validate_coe_roles(data: Dict[str, Any]) -> Dict[str, Optional[int]]:
+    """Takes {role_key: user_id or None}, returns it normalized (every
+    ACCOUNTABLE_ROLES key present, unknown keys dropped, missing/None
+    kept as None — resolved to the workspace admin at read time, not
+    here, since this module has no DB access)."""
+    result: Dict[str, Optional[int]] = {key: None for key in ACCOUNTABLE_ROLES}
+    for role_key in ACCOUNTABLE_ROLES:
+        value = data.get(role_key)
+        if value is None or value == "":
+            continue
+        try:
+            result[role_key] = int(value)
+        except (TypeError, ValueError):
+            raise WorkspaceError(f"'{ACCOUNTABLE_ROLES[role_key]['label']}' must be a user id.")
+    return result
+
+
+def resolve_coe_roles(coe_roles: Dict[str, Any], workspace_admin_user_id: int) -> Dict[str, int]:
+    """A brand-new coe_initiative needs zero setup: any role nobody has
+    explicitly assigned defaults to the workspace admin, so Guide/Ledger/
+    Gate all work immediately without an admin having to fill in a form
+    first."""
+    return {
+        role_key: (coe_roles.get(role_key) or workspace_admin_user_id)
+        for role_key in ACCOUNTABLE_ROLES
+    }
