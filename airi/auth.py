@@ -32,6 +32,19 @@ SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # signed-in sessions last 30 days
 ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60  # admin tokens are short-lived — re-enter the password twice a day
 JWT_ALGORITHM = "HS256"
 
+# otp_codes now carries a `purpose` column (sql/011) so the same
+# generate_code/hash_code/verify_code machinery below can issue codes for
+# more than one reason without them being interchangeable: a plain
+# sign-in code (POST /auth/request-code) and a step-up confirmation code
+# for a sensitive in-app action (POST /auth/coe-governance/request-code,
+# used to flip CoE governance on/off — see api.py) are stored and looked
+# up as separate "latest unconsumed code" lines per email, even though
+# both are 6-digit codes hashed the same way. Add a new constant here —
+# never a bare string — for any future step-up action, so a typo can't
+# silently make two purposes collide.
+LOGIN_OTP_PURPOSE = "login"
+COE_TOGGLE_OTP_PURPOSE = "coe_toggle"
+
 # A team member's access code (see generate_access_code below) is a
 # different kind of credential from the two above: it isn't short-lived
 # or single-use, it's what the member signs in with indefinitely until

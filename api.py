@@ -30,6 +30,8 @@ from airi import author, comparison, consolidated_report, db, notes, runtime_con
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
+    COE_TOGGLE_OTP_PURPOSE,
+    LOGIN_OTP_PURPOSE,
     MAX_VERIFY_ATTEMPTS,
     AuthError,
     create_admin_token,
@@ -185,17 +187,19 @@ def _require_project_admin(project_id: int, user_id: int) -> Tuple[dict, dict]:
     return proj, workspace
 
 
-def _require_coe_governance_enabled(workspace: dict) -> None:
+def _require_coe_governance_enabled(project: dict) -> None:
     """Gate for the 3 CoE write endpoints (coe-risk/coe-roles/coe-phases):
-    the switch lives on the workspace (see ws: "projects: CoE
-    governance"), so a project in a workspace that never turned it on
-    can't accumulate governance data behind that decision — including
-    via a direct API call, not just through the UI, which already hides
-    the Governance tab in that case."""
-    if not workspace.get("coe_governance_enabled"):
+    the switch lives on the PROJECT now (see ws: "projects: CoE
+    governance") — a project whose own coe_governance_enabled is off
+    can't accumulate governance data, including via a direct API call,
+    not just through the UI, which already hides the Governance content
+    in that case. Note this takes the project dict, not the workspace —
+    the workspace's switch is only a default for new projects (see
+    create_project) and no longer gates anything by itself."""
+    if not project.get("coe_governance_enabled"):
         raise HTTPException(
             status_code=400,
-            detail="CoE governance isn't enabled for this workspace — turn it on in workspace settings first.",
+            detail="CoE governance isn't enabled for this project — turn it on in the Governance tab first.",
         )
 
 
@@ -408,10 +412,28 @@ class AppKeyConfirmBody(BaseModel):
 
 
 class WorkspaceBody(BaseModel):
+    """coe_governance_enabled is only ever read from this body at
+    *creation* time (POST /workspaces) — the general PUT /workspaces/{id}
+    update ignores it entirely now. Changing it on an existing workspace
+    goes through CoeGovernanceToggleBody / PUT
+    /workspaces/{id}/coe-governance instead, which requires a step-up
+    code."""
+
     title: str = ""
     target: str = ""
     description: str = ""
     coe_governance_enabled: bool = False
+
+
+class CoeGovernanceToggleBody(BaseModel):
+    """Body for PUT /workspaces/{id}/coe-governance and PUT
+    /projects/{id}/coe-governance — both require `code` to be a valid,
+    unconsumed step-up code (see POST /auth/coe-governance/request-code)
+    for the caller's own signed-in email, on top of the usual admin-only
+    permission check."""
+
+    enabled: bool = False
+    code: str = ""
 
 
 class WorkspaceMemberBody(BaseModel):
@@ -674,7 +696,10 @@ def request_code(body: RequestCodeBody):
             raise HTTPException(status_code=429, detail="Too many code requests for this email today — try again tomorrow.")
 
         code = generate_code()
-        db.create_otp_code(email, hash_code(email, code, pepper), now + timedelta(seconds=CODE_TTL_SECONDS))
+        db.create_otp_code(
+            email, hash_code(email, code, pepper), now + timedelta(seconds=CODE_TTL_SECONDS),
+            purpose=LOGIN_OTP_PURPOSE,
+        )
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -699,7 +724,7 @@ def verify_code_endpoint(body: VerifyCodeBody):
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
-        row = db.get_latest_unconsumed_code(email)
+        row = db.get_latest_unconsumed_code(email, purpose=LOGIN_OTP_PURPOSE)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -794,6 +819,68 @@ def accept_terms_endpoint(authorization: Optional[str] = Header(default=None)):
     return {"terms_accepted": True}
 
 
+@app.post("/auth/coe-governance/request-code")
+def request_coe_governance_code(authorization: Optional[str] = Header(default=None)):
+    """Step-up confirmation, step 1: emails a fresh 6-digit code to the
+    signed-in caller's own address, to be submitted alongside PUT
+    /workspaces/{id}/coe-governance or PUT /projects/{id}/coe-governance.
+    Deliberately not scoped to a workspace or project — it only proves
+    "signed in as this email, right now"; the confirm endpoints are what
+    check whether this caller is actually the admin of the specific
+    workspace/project they're trying to toggle.
+
+    Same OTP machinery as /auth/request-code (code generation, hashing,
+    rate limiting), stored under a different purpose (see
+    airi.auth.COE_TOGGLE_OTP_PURPOSE) so this can never be satisfied by,
+    or collide with, an ordinary sign-in code."""
+    email, _user_id = _require_session_email_and_user_id(authorization)
+    pepper = _get_auth_secret()
+    now = datetime.now(timezone.utc)
+    try:
+        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS)) > 0:
+            raise HTTPException(status_code=429, detail="Please wait a minute before requesting another code.")
+        if db.count_recent_otp_requests(email, now - timedelta(hours=24)) >= OTP_DAILY_REQUEST_LIMIT:
+            raise HTTPException(status_code=429, detail="Too many code requests for this email today — try again tomorrow.")
+
+        code = generate_code()
+        db.create_otp_code(
+            email, hash_code(email, code, pepper), now + timedelta(seconds=CODE_TTL_SECONDS),
+            purpose=COE_TOGGLE_OTP_PURPOSE,
+        )
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    try:
+        send_otp_email(email, code)
+    except EmailSendError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {"message": "Check your email for a 6-digit code to confirm this change. It expires in 10 minutes."}
+
+
+def _verify_coe_toggle_code(email: str, code: str) -> None:
+    """Shared by both PUT .../coe-governance endpoints below. Raises the
+    same 400s as /auth/verify-code, for the same reasons, but never
+    creates a session — it only consumes the step-up code so the caller
+    is one-time-confirmed for the toggle they're about to make."""
+    secret = _get_auth_secret()
+    try:
+        row = db.get_latest_unconsumed_code(email, purpose=COE_TOGGLE_OTP_PURPOSE)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    if row is None:
+        raise HTTPException(status_code=400, detail="No confirmation code requested — request one first.")
+    if row["attempts"] >= MAX_VERIFY_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Too many incorrect attempts — request a new code.")
+    if datetime.now(timezone.utc) > row["expires_at"]:
+        raise HTTPException(status_code=400, detail="That code expired — request a new one.")
+    if not verify_code(email, code, secret, row["code_hash"]):
+        db.increment_attempts(row["id"])
+        raise HTTPException(status_code=400, detail="Incorrect code.")
+    db.consume_code(row["id"])
+
+
 # --- Workspaces / Projects (Phase 1 — see docs/WORKSPACES.md) ---
 #
 # Everything below requires a signed-in session (Authorization: Bearer
@@ -866,13 +953,18 @@ def list_workspaces(authorization: Optional[str] = Header(default=None)):
 
 @app.post("/workspaces")
 def create_workspace(body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
+    """coe_governance_enabled is taken straight from the body here (no
+    step-up code needed — see WorkspaceBody) since a brand-new workspace
+    has no existing projects for a step-up confirmation to protect. It
+    becomes this workspace's default for projects created in it; see
+    "projects: CoE governance" in airi/workspaces.py."""
     user_id = _require_user_id(authorization)
     try:
-        title, target, description, coe_governance_enabled = ws.validate_workspace_fields(body.model_dump())
+        title, target, description = ws.validate_workspace_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:
-        workspace = db.create_workspace(user_id, title, target, description, coe_governance_enabled)
+        workspace = db.create_workspace(user_id, title, target, description, bool(body.coe_governance_enabled))
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return _workspace_detail(workspace, "admin")  # whoever creates a workspace is its admin
@@ -887,17 +979,40 @@ def get_workspace(workspace_id: int, authorization: Optional[str] = Header(defau
 
 @app.put("/workspaces/{workspace_id}")
 def update_workspace(workspace_id: int, body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
-    """Editing a workspace's basic details (title/target/description,
-    plus the CoE governance switch) is admin-only — a team member can
-    work inside a workspace but can't rename it, change what it's for,
-    or turn governance on/off for everyone."""
+    """Editing a workspace's basic details (title/target/description) is
+    admin-only — a team member can work inside a workspace but can't
+    rename it or change what it's for. Does NOT touch the CoE governance
+    switch any more, even though WorkspaceBody still carries that field
+    (creation-only, see WorkspaceBody's docstring) — PUT
+    /workspaces/{id}/coe-governance is the only way to change it on an
+    existing workspace."""
     user_id = _require_user_id(authorization)
     _require_workspace_admin(workspace_id, user_id)
     try:
-        title, target, description, coe_governance_enabled = ws.validate_workspace_fields(body.model_dump())
+        title, target, description = ws.validate_workspace_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    workspace = db.update_workspace(workspace_id, title, target, description, coe_governance_enabled)
+    workspace = db.update_workspace(workspace_id, title, target, description)
+    return _workspace_detail(workspace, "admin")
+
+
+@app.put("/workspaces/{workspace_id}/coe-governance")
+def set_workspace_coe_governance(
+    workspace_id: int, body: CoeGovernanceToggleBody, authorization: Optional[str] = Header(default=None),
+):
+    """Admin-only, and requires a step-up code from POST
+    /auth/coe-governance/request-code for the caller's own email (see
+    _verify_coe_toggle_code) — being signed in as the admin isn't enough
+    by itself for this one action, unlike every other admin-only
+    workspace setting.
+
+    Only changes what a *new* project in this workspace defaults to —
+    see PUT /projects/{id}/coe-governance for the switch that governs an
+    existing project."""
+    email, user_id = _require_session_email_and_user_id(authorization)
+    _require_workspace_admin(workspace_id, user_id)
+    _verify_coe_toggle_code(email, body.code)
+    workspace = db.set_workspace_coe_governance(workspace_id, bool(body.enabled))
     return _workspace_detail(workspace, "admin")
 
 
@@ -1037,14 +1152,25 @@ def project_types():
 def create_project(workspace_id: int, body: ProjectBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only: creating a project is a workspace-identity operation,
     same bucket as creating/deleting the workspace itself — a team
-    member works inside existing projects but can't add new ones."""
+    member works inside existing projects but can't add new ones.
+
+    The new project's own coe_governance_enabled is resolved from the
+    workspace's *current* switch at this exact moment (see
+    "projects: CoE governance" in airi/workspaces.py) — not passed in the
+    body, since this is a default a project starts with, not something
+    the create form itself offers to set. It can be changed afterwards,
+    independently of the workspace, via PUT /projects/{id}/coe-governance."""
     user_id = _require_user_id(authorization)
-    _require_workspace_admin(workspace_id, user_id)
+    workspace = _require_workspace_admin(workspace_id, user_id)
     try:
         title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {**db.create_project(workspace_id, title, description, tech_stack, project_type), "role": "admin"}
+    created = db.create_project(
+        workspace_id, title, description, tech_stack, project_type,
+        coe_governance_enabled=bool(workspace.get("coe_governance_enabled")),
+    )
+    return {**created, "role": "admin"}
 
 
 @app.get("/projects/{project_id}")
@@ -1068,6 +1194,33 @@ def update_project(project_id: int, body: ProjectBody, authorization: Optional[s
     return {**db.update_project(project_id, title, description, tech_stack, project_type), "role": "admin"}
 
 
+@app.put("/projects/{project_id}/coe-governance")
+def set_project_coe_governance(
+    project_id: int, body: CoeGovernanceToggleBody, authorization: Optional[str] = Header(default=None),
+):
+    """Admin-only, and requires a step-up code from POST
+    /auth/coe-governance/request-code for the caller's own email (see
+    _verify_coe_toggle_code) — same reasoning as PUT
+    /workspaces/{id}/coe-governance. This is the switch that actually
+    governs the project: turning it off doesn't delete any
+    already-recorded risk_tier/coe_roles/coe_phase_state/ledger history,
+    it just stops surfacing/accepting new writes for it (see
+    _require_coe_governance_enabled) — turning it back on picks up
+    exactly where it left off. Logs a `governance_toggled` ledger event
+    either way, same as every other CoE write."""
+    email, user_id = _require_session_email_and_user_id(authorization)
+    proj, _workspace = _require_project_admin(project_id, user_id)
+    _verify_coe_toggle_code(email, body.code)
+    enabled = bool(body.enabled)
+    previous = bool(proj.get("coe_governance_enabled"))
+    updated = db.set_project_coe_governance(project_id, enabled)
+    db.create_coe_event(
+        project_id, None, "governance_toggled", user_id,
+        from_value=("on" if previous else "off"), to_value=("on" if enabled else "off"), note="",
+    )
+    return {**updated, "role": "admin"}
+
+
 @app.delete("/projects/{project_id}")
 def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only, same reasoning as delete_workspace."""
@@ -1079,7 +1232,7 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 
 
 # --- CoE governance (a project's risk tier, 6 gates, and 3 accountable ---
-# --- roles when the workspace has it turned on; see airi/workspaces.py) ---
+# --- roles when that project has it turned on; see airi/workspaces.py) ---
 #
 # Deliberately open to any active workspace member, not admin-only, for
 # the risk form and gate updates — same level as notes/tool runs
@@ -1088,8 +1241,11 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 # question without needing the workspace admin to do it for them. Role
 # *assignment* (who holds business/technical/governance owner) stays
 # admin-only, same bucket as changing a project's title or type. All 3
-# writes 400 via _require_coe_governance_enabled if the workspace switch
-# is off — see ws: "projects: CoE governance".
+# writes 400 via _require_coe_governance_enabled if THIS PROJECT's own
+# switch is off — see ws: "projects: CoE governance". Flipping that
+# switch itself (PUT /projects/{id}/coe-governance, below, right after
+# update_project) is a step further up than plain admin-only: it also
+# needs a step-up email code.
 
 
 @app.get("/projects/coe-catalog")
@@ -1113,8 +1269,8 @@ def set_project_coe_risk(project_id: int, body: CoeRiskBody, authorization: Opti
     recomputing the tier is meant to be cheap and frequent (see "tier is
     not fixed at intake" in the plan doc), not a one-time admin action."""
     user_id = _require_user_id(authorization)
-    project_row, workspace, _role = _get_accessible_project(project_id, user_id)
-    _require_coe_governance_enabled(workspace)
+    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    _require_coe_governance_enabled(project_row)
     try:
         risk_factors = ws.validate_risk_answers(body.risk_factors)
     except ws.WorkspaceError as exc:
@@ -1134,8 +1290,8 @@ def set_project_coe_risk(project_id: int, body: CoeRiskBody, authorization: Opti
 def set_project_coe_roles(project_id: int, body: CoeRolesBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only — same bucket as update_project."""
     user_id = _require_user_id(authorization)
-    _proj, workspace = _require_project_admin(project_id, user_id)
-    _require_coe_governance_enabled(workspace)
+    proj, _workspace = _require_project_admin(project_id, user_id)
+    _require_coe_governance_enabled(proj)
     try:
         coe_roles = ws.validate_coe_roles(body.model_dump())
     except ws.WorkspaceError as exc:
@@ -1165,7 +1321,7 @@ def set_project_coe_gate(project_id: int, gate_key: str, body: CoeGateBody, auth
     record."""
     user_id = _require_user_id(authorization)
     project_row, workspace, _role = _get_accessible_project(project_id, user_id)
-    _require_coe_governance_enabled(workspace)
+    _require_coe_governance_enabled(project_row)
     try:
         gate_key, status, note = ws.validate_gate_update(gate_key, body.status, body.note)
     except ws.WorkspaceError as exc:

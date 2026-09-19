@@ -72,18 +72,21 @@ def verify_app_key(user_id: int, app_key: str, pepper: str, expected_hash: str) 
 
 # ---------- workspaces ----------
 
-def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str, bool]:
-    """Returns (title, target, description, coe_governance_enabled), the
-    first three trimmed. Raises WorkspaceError on the first problem
-    found. coe_governance_enabled is a plain workspace-wide switch (see
-    "projects: CoE governance" below) — nothing to validate beyond
-    coercing to bool, same full-replace convention as every other
-    workspace/admin setting in this codebase (the form always submits
-    the whole state, so there's no partial-update logic to get wrong)."""
+def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str]:
+    """Returns (title, target, description), all trimmed. Raises
+    WorkspaceError on the first problem found.
+
+    coe_governance_enabled deliberately isn't part of this validator (or
+    of update_workspace/PUT /workspaces/{id}) any more — as of sql/011 it
+    can only change through the step-up-code-gated toggle endpoint (see
+    "projects: CoE governance" below), never ride along on an ordinary
+    title/target/description save. It's still read directly off the
+    Pydantic body at *creation* time only (POST /workspaces in api.py),
+    since a brand-new workspace has nothing yet for a step-up
+    confirmation to protect."""
     title = (data.get("title") or "").strip()
     target = (data.get("target") or "").strip()
     description = (data.get("description") or "").strip()
-    coe_governance_enabled = bool(data.get("coe_governance_enabled"))
 
     if not title:
         raise WorkspaceError("Workspace title is required.")
@@ -93,7 +96,7 @@ def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str, bool
         raise WorkspaceError(f"Workspace target is too long (max {TARGET_MAX_CHARS} characters).")
     if len(description) > DESCRIPTION_MAX_CHARS:
         raise WorkspaceError(f"Workspace description is too long (max {DESCRIPTION_MAX_CHARS} characters).")
-    return title, target, description, coe_governance_enabled
+    return title, target, description
 
 
 def normalize_member_email(email: str) -> str:
@@ -177,11 +180,12 @@ def validate_tech_stack(data: Dict[str, Any], require_full: bool = True) -> Dict
 # dev-tool seat/usage request.
 #
 # CoE governance (see below) used to be a 4th type, "coe_initiative",
-# that linked back to one of these three. It's now a workspace-wide
-# switch instead (`coe_governance_enabled` on the workspace) — when on,
-# EVERY project in that workspace, of any of these three types, carries
-# the risk tier/gates/roles/ledger; there's no separate governance
-# project to create or link.
+# that linked back to one of these three. It's now a switch instead —
+# every project, of any of these three types, has its own
+# coe_governance_enabled (defaulted from the workspace's switch at
+# creation, independently flippable after that — see "projects: CoE
+# governance" below); there's no separate governance project to create
+# or link.
 
 PROJECT_TYPES = {
     "api_request": {"label": "API request"},
@@ -229,17 +233,39 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
 # setup for a low-risk initiative and to get genuinely hard to bypass
 # for a high-risk one.
 #
-# It's a workspace-wide switch (`coe_governance_enabled` on the
-# workspace, see validate_workspace_fields), not a project type or a
-# per-project opt-in: whoever can create a project is already the
-# workspace admin, so "does this workspace do CoE governance" is a
-# workspace-level decision. With the switch off, a project's
-# risk_tier/coe_roles/coe_phase_state just stay at their defaults and
-# none of this ever surfaces — the process is exactly what it was
-# before this feature existed. api.py's three write endpoints
-# (coe-risk, coe-roles, coe-phases) 400 if the switch is off, so the
-# data can't be set behind the workspace's back even by a direct API
-# call.
+# Two-level switch, as of sql/011 (see docs/WORKSPACES.md for the full
+# history — this went through a project-type shape, then a
+# workspace-only-switch shape, before landing here):
+#
+#   - workspaces.coe_governance_enabled is the DEFAULT a brand-new
+#     project is created with. Changing it later only affects projects
+#     created after that point — it is no longer a live gate.
+#   - projects.coe_governance_enabled is the switch that actually
+#     governs a given project day to day. It starts out equal to the
+#     workspace's switch at creation time, and from then on a workspace
+#     admin can flip it independently for that one project, without
+#     touching any of its siblings.
+#
+# Only a workspace admin can flip either switch (never a team member,
+# and never the project's own "any active member can work inside it"
+# level that the risk form / gates use) — same admin-only bucket as
+# renaming a workspace or a project. Both flips additionally require a
+# fresh step-up email code (see POST /auth/coe-governance/request-code
+# and the PUT .../coe-governance endpoints in api.py) — being signed in
+# as the admin isn't enough by itself for this one action. What rule (if
+# any) should block a flip — e.g. disallowing turning a project's switch
+# off while it has open Mandatory gates — is a deliberately open
+# question for a later pass; for now the toggle is unconditional once
+# the code verifies.
+#
+# With a project's own switch off, its risk_tier/coe_roles/
+# coe_phase_state just stay at their defaults and none of this ever
+# surfaces — the process is exactly what it was before this feature
+# existed. api.py's three write endpoints (coe-risk, coe-roles,
+# coe-phases) 400 via _require_coe_governance_enabled if THAT PROJECT's
+# switch is off, so the data can't be set behind it even by a direct API
+# call — see api.py, this check moved from the workspace to the project
+# along with the switch itself.
 #
 # Identity enforcement: clearing a Mandatory gate is restricted to
 # whoever resolve_coe_roles() names for that gate's accountable_role
@@ -480,7 +506,7 @@ def validate_coe_roles(data: Dict[str, Any]) -> Dict[str, Optional[int]]:
 
 
 def resolve_coe_roles(coe_roles: Dict[str, Any], workspace_admin_user_id: int) -> Dict[str, int]:
-    """A workspace that just turned CoE governance on needs zero role
+    """A project that just had CoE governance turned on needs zero role
     setup: any role nobody has explicitly assigned defaults to the
     workspace admin, so Guide/Ledger/Gate all work immediately without
     an admin having to fill in a form first."""

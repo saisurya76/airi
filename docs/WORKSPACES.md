@@ -10,10 +10,12 @@ Dashboard tab, a Notes tab, and an Actions tab with a downloadable
 consolidated PDF report; Phase 4 added a cross-project comparison tab
 with its own PDF report, plus per-saved-run PDF downloads; Phase 5
 gave a workspace's team members their own real, role-scoped access
-instead of just an email notification; Phase 6 (this delivery — see
-"CoE Governance" below) adds a workspace-wide switch that runs every
-project in that workspace through a risk-tiered governance model. No
-further phases are planned as of this delivery.
+instead of just an email notification; Phase 6 (see "CoE Governance"
+below) adds a risk-tiered governance model, switched on per project
+(defaulted from a workspace-level setting) rather than for a whole
+workspace at once, with the on/off switch itself requiring a step-up
+email code on top of being the workspace admin. No further phases are
+planned as of this delivery.
 
 Like Exact mode, this entire feature requires a signed-in session — a
 workspace's admin signs in with email + OTP (see
@@ -476,57 +478,88 @@ members" above — Phase 5 changed their behavior, not their shape.)
 A lightweight, risk-tiered governance model an initiative can run
 through instead of a generic checklist — designed to need **zero
 setup** for a low-risk project and to get genuinely hard to bypass for
-a high-risk one. It's a **workspace-wide switch**
-(`coe_governance_enabled` on the workspace, toggled from the workspace
-panel — see "The workspace-level switch" below), not a project type or
-a per-project opt-in: whoever can create a project is already the
-workspace admin (see "Team-member access" above), so "does this
-workspace do CoE governance" is naturally a workspace decision. With
-the switch off, every project works exactly as it did before this
-feature existed; with it on, **every** project in that workspace —
-`api_request`, `license_request`, or `sdlc_request` alike — carries a
-risk tier, 6 gates, accountable roles, and a decision ledger.
+a high-risk one. Governance is switched on and off **per project**
+(`coe_governance_enabled` on `projects`) — every project, of any of the
+3 types (`api_request`/`license_request`/`sdlc_request`), has its own
+switch. A new project starts out at whatever its workspace's own
+`coe_governance_enabled` default currently is; from then on a workspace
+admin can flip that one project's switch independently, without
+touching any of its siblings or the workspace default itself. Both
+switches — the workspace-level default and a project's own — are
+admin-only *and* require a fresh step-up email code to flip, on top of
+being signed in as the admin (see "The two switches" below). With a
+project's switch off, it works exactly as it did before this feature
+existed; with it on, that project carries a risk tier, 6 gates,
+accountable roles, and a decision ledger.
 
-This went through two earlier shapes during development, both
+This went through three earlier shapes during development, all
 superseded: a 4th `project_type` called `coe_initiative` (`sql/008`),
-then a `coe_linked_project_id` column so that initiative could point
-at an existing project (`sql/009`). `sql/010_coe_workspace_toggle.sql`
-replaces both with the workspace switch — it drops `coe_initiative`
-from the `project_type` check constraint and drops the now-pointless
-`coe_linked_project_id` column, while *keeping* the five columns
-`sql/008` added to `projects` (`risk_tier`, `risk_factors`,
-`risk_explanation`, `coe_roles`, `coe_phase_state`) and the
-`coe_control_events` ledger table, since those apply to any project
-type once the switch is on. The catalogs themselves (risk factors,
-gates, roles) are server-defined Python constants in
-`airi/workspaces.py`, not new tables — same pattern as
-`TECH_STACK_CATEGORIES` — served unauthenticated via `GET
-/projects/coe-catalog` so the frontend never hardcodes them.
+then a `coe_linked_project_id` column so that initiative could point at
+an existing project (`sql/009`), then a single workspace-wide switch
+with no per-project override (`sql/010`). `sql/011_coe_project_level_governance.sql`
+adds the per-project switch on top of `sql/010`'s workspace switch (and
+a `purpose` column on `otp_codes` — see "The two switches" below),
+while *keeping* the five columns `sql/008` added to `projects`
+(`risk_tier`, `risk_factors`, `risk_explanation`, `coe_roles`,
+`coe_phase_state`) and the `coe_control_events` ledger table unchanged,
+since those apply the same way regardless of which shape controls the
+on/off switch. The catalogs themselves (risk factors, gates, roles) are
+server-defined Python constants in `airi/workspaces.py`, not new
+tables — same pattern as `TECH_STACK_CATEGORIES` — served
+unauthenticated via `GET /projects/coe-catalog` so the frontend never
+hardcodes them.
 
-### The workspace-level switch
+### The two switches
 
-`coe_governance_enabled` is a plain boolean on `workspaces`, edited the
-same full-replace way as title/target/description (`ws.validate_workspace_fields`
-returns it as a 4th value; the workspace panel's "CoE governance"
-toggle autosaves it the same way those fields do). Only the workspace
-admin can flip it (`PUT /workspaces/{id}` is already admin-gated) — a
-team member can work inside whatever projects that decision produces,
-but doesn't make the decision itself. `api.py`'s
-`_require_coe_governance_enabled` guards all 3 CoE *write* endpoints
-(coe-risk, coe-roles, coe-phases) with a 400 if the switch is off, so
-governance data can't be set behind the workspace's back even via a
-direct API call — the frontend also simply doesn't render the
-Governance tab in that case, but the backend doesn't rely on that
-alone. Turning the switch off again doesn't delete anything already
-recorded (risk tier, gate state, ledger) — it just stops surfacing it,
-so turning it back on picks up exactly where it left off.
+`workspaces.coe_governance_enabled` is only ever read at **project
+creation time** now — it's what a brand-new project in that workspace
+defaults to, nothing more. It's still settable directly (no step-up
+code) on `POST /workspaces`, since a brand-new workspace has no
+existing projects for a step-up confirmation to protect, but `PUT
+/workspaces/{id}` (the ordinary title/target/description autosave) no
+longer touches it at all.
+
+`projects.coe_governance_enabled` is the switch that actually governs
+a given project day to day — it's what `_require_coe_governance_enabled`
+checks, and what the frontend's Governance tab reads to decide whether
+to show the risk quiz or an "off" empty state. It starts out equal to
+the workspace's switch at creation time (see `create_project` in
+`api.py`), then lives entirely independently of it.
+
+Both switches change only through their own dedicated, step-up-gated
+endpoint — `PUT /workspaces/{id}/coe-governance` or `PUT
+/projects/{id}/coe-governance` — never through the ordinary
+title/target/description or title/description/tech-stack/type saves.
+Flipping either one is a 2-step dance: `POST
+/auth/coe-governance/request-code` emails a fresh 6-digit code to the
+signed-in caller's own address (reusing the same OTP machinery as
+sign-in — `airi.auth.generate_code`/`hash_code`/`verify_code` — under a
+different `purpose`, `coe_toggle`, so it can never be satisfied by, or
+collide with, an ordinary sign-in code — see `otp_codes.purpose`,
+`sql/011`), then the caller submits that code alongside `{"enabled":
+bool, "code": str}` to the toggle endpoint itself, which verifies it
+before applying anything. Both endpoints are also admin-only, same
+bucket as renaming a workspace or a project — a team member never sees
+either toggle. The frontend's `governanceToggleRowHtml`/
+`wireGovernanceToggle` (in `frontend/workspaces.html`) implement this
+same request→reveal-code-row→confirm flow for both switches, so there's
+one flow to reason about rather than two.
+
+Deliberately **not** decided yet: any rule about *when* a flip should
+be allowed — e.g. whether turning a project's governance off should be
+blocked while it has open Mandatory gates. For now, once the code
+verifies, the flip is unconditional either direction. Turning either
+switch off doesn't delete anything already recorded on a project (risk
+tier, gate state, ledger) — it just stops surfacing/accepting new
+writes for it, so turning it back on picks up exactly where it left
+off.
 
 ### Risk tiering: worst-factor-wins
 
-Once governance is on for a workspace, a project shows nothing but a
-4-question risk quiz (`RISK_FACTORS` in `airi/workspaces.py`: Data,
-Autonomy, Exposure, Reversibility) until it's answered — answering it
-immediately unlocks everything else. `compute_risk_tier` takes the
+Once governance is on for a project, it shows nothing but a 4-question
+risk quiz (`RISK_FACTORS` in `airi/workspaces.py`: Data, Autonomy,
+Exposure, Reversibility) until it's answered — answering it immediately
+unlocks everything else. `compute_risk_tier` takes the
 **max** score across the 4 answers, not an average: one severely-
 scored factor is enough to make the whole project High, the same way a
 single failed safety check outweighs three passing ones. That also
@@ -584,11 +617,16 @@ renders it as a collapsed "History" section, reusing the
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /workspaces` / `PUT /workspaces/{id}` | Extended with `coe_governance_enabled` (bool, default `false`). Admin-only on the `PUT`, same bucket as title/target/description. |
+| `POST /workspaces` | Takes `coe_governance_enabled` (bool, default `false`) straight from the body, no step-up code — sets the default new projects in this workspace start with. |
+| `PUT /workspaces/{id}` | Title/target/description only, admin-only. Does **not** touch `coe_governance_enabled` any more. |
+| `PUT /workspaces/{id}/coe-governance` | Admin-only + a valid step-up code (see `POST /auth/coe-governance/request-code` below). Body: `{"enabled": bool, "code": str}`. Only changes what a *new* project in this workspace defaults to. |
+| `POST /workspaces/{id}/projects` | Resolves the new project's `coe_governance_enabled` from the workspace's *current* switch at this exact moment — not part of the request body. |
+| `PUT /projects/{id}/coe-governance` | Admin-only + a valid step-up code, same shape as the workspace one. This is the switch that actually governs the project — appends a `governance_toggled` ledger event either way. |
+| `POST /auth/coe-governance/request-code` | Any signed-in user. Emails a fresh 6-digit code to the caller's own address (purpose `coe_toggle`), to be submitted to one of the two `coe-governance` endpoints above. Not scoped to a workspace/project — it only proves "signed in as this email, right now"; the confirm endpoints check admin permission on the specific resource separately. Same rate limiting (60s cooldown, 5/day) as `POST /auth/request-code`, sharing the same per-email budget. |
 | `GET /projects/coe-catalog` | Unauthenticated. Returns `RISK_FACTORS`, `COE_GATES`, `ACCOUNTABLE_ROLES`, `ENFORCEMENT_LOOKUP` so the frontend never hardcodes them. |
-| `PUT /projects/{id}/coe-risk` | `400`s via `_require_coe_governance_enabled` if the workspace switch is off. Otherwise, body: one answer per `RISK_FACTORS` key — computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
-| `PUT /projects/{id}/coe-roles` | Admin-only, and 400s if the switch is off. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
-| `PUT /projects/{id}/coe-phases/{gate_key}` | 400s if the switch is off. Otherwise body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
+| `PUT /projects/{id}/coe-risk` | `400`s via `_require_coe_governance_enabled` if *this project's own* switch is off. Otherwise, body: one answer per `RISK_FACTORS` key — computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
+| `PUT /projects/{id}/coe-roles` | Admin-only, and 400s if this project's switch is off. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
+| `PUT /projects/{id}/coe-phases/{gate_key}` | 400s if this project's switch is off. Otherwise body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
 | `GET /projects/{id}/coe-ledger` | All `coe_control_events` for the project, newest-first. Not gated by the switch — reading a project's (possibly empty) history is harmless either way. |
 
 ## What's next

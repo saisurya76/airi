@@ -70,7 +70,14 @@ def reset_pool_for_tests() -> None:
 
 def count_recent_otp_requests(email: str, since: datetime) -> int:
     """How many codes has this email requested since `since`? Used for
-    rate limiting (both the 60-second cooldown and the daily cap)."""
+    rate limiting (both the 60-second cooldown and the daily cap).
+
+    Deliberately NOT filtered by purpose (see otp_codes.purpose, sql/011)
+    — a login code and a CoE-toggle step-up code draw from the same
+    per-email budget. That's a simplicity choice (protecting the shared
+    Resend quota matters more than letting the two accumulate
+    independently), not a security one; revisit if it turns out to be
+    annoying in practice."""
     with _cursor() as cur:
         cur.execute(
             "SELECT count(*) AS n FROM otp_codes WHERE lower(email) = lower(%s) AND created_at >= %s",
@@ -79,26 +86,31 @@ def count_recent_otp_requests(email: str, since: datetime) -> int:
         return cur.fetchone()["n"]
 
 
-def create_otp_code(email: str, code_hash: str, expires_at: datetime) -> int:
+def create_otp_code(email: str, code_hash: str, expires_at: datetime, purpose: str = "login") -> int:
     with _cursor() as cur:
         cur.execute(
-            "INSERT INTO otp_codes (email, code_hash, expires_at) VALUES (%s, %s, %s) RETURNING id",
-            (email, code_hash, expires_at),
+            "INSERT INTO otp_codes (email, code_hash, expires_at, purpose) VALUES (%s, %s, %s, %s) RETURNING id",
+            (email, code_hash, expires_at, purpose),
         )
         return cur.fetchone()["id"]
 
 
-def get_latest_unconsumed_code(email: str) -> Optional[dict]:
+def get_latest_unconsumed_code(email: str, purpose: str = "login") -> Optional[dict]:
+    """`purpose` must match the value create_otp_code was called with for
+    the code being looked for — see airi.auth.LOGIN_OTP_PURPOSE /
+    COE_TOGGLE_OTP_PURPOSE. Without this filter, requesting a step-up
+    code shortly after (or before) a login code for the same email could
+    make verification pick up the wrong one."""
     with _cursor() as cur:
         cur.execute(
             """
             SELECT id, code_hash, expires_at, attempts, consumed
             FROM otp_codes
-            WHERE lower(email) = lower(%s) AND consumed = FALSE
+            WHERE lower(email) = lower(%s) AND purpose = %s AND consumed = FALSE
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (email,),
+            (email, purpose),
         )
         return cur.fetchone()
 
@@ -281,16 +293,38 @@ def get_workspace(workspace_id: int) -> Optional[dict]:
         return cur.fetchone()
 
 
-def update_workspace(workspace_id: int, title: str, target: str, description: str, coe_governance_enabled: bool = False) -> Optional[dict]:
+def update_workspace(workspace_id: int, title: str, target: str, description: str) -> Optional[dict]:
+    """Basic-details full replace. Deliberately does NOT touch
+    coe_governance_enabled any more (sql/011) — that switch now requires
+    a step-up email code (see set_workspace_coe_governance below and PUT
+    /workspaces/{id}/coe-governance in api.py), so it can't ride along
+    on an ordinary title/target/description save."""
     with _cursor() as cur:
         cur.execute(
             f"""
-            UPDATE workspaces SET title = %s, target = %s, description = %s,
-                coe_governance_enabled = %s, updated_at = now()
+            UPDATE workspaces SET title = %s, target = %s, description = %s, updated_at = now()
             WHERE id = %s
             RETURNING {_WORKSPACE_FIELDS}
             """,
-            (title, target, description, coe_governance_enabled, workspace_id),
+            (title, target, description, workspace_id),
+        )
+        return cur.fetchone()
+
+
+def set_workspace_coe_governance(workspace_id: int, enabled: bool) -> Optional[dict]:
+    """The step-up-gated toggle (see PUT /workspaces/{id}/coe-governance
+    in api.py, which verifies a one-time code before calling this) —
+    changes only what new projects in this workspace default to; see
+    set_project_coe_governance for the switch that actually governs an
+    existing project."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE workspaces SET coe_governance_enabled = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_WORKSPACE_FIELDS}
+            """,
+            (enabled, workspace_id),
         )
         return cur.fetchone()
 
@@ -435,19 +469,26 @@ def get_active_memberships_by_email(email: str) -> List[dict]:
 _PROJECT_FIELDS = (
     "id, workspace_id, title, description, tech_stack, project_type, "
     "risk_tier, risk_factors, risk_explanation, coe_roles, coe_phase_state, "
-    "created_at, updated_at"
+    "coe_governance_enabled, created_at, updated_at"
 )
 
 
-def create_project(workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str) -> dict:
+def create_project(
+    workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str,
+    coe_governance_enabled: bool,
+) -> dict:
+    """coe_governance_enabled has no default on purpose — the caller
+    (POST /workspaces/{id}/projects in api.py) must always resolve it
+    explicitly from the parent workspace's current switch, so a new
+    project's starting governance state is never silently forgotten."""
     with _cursor() as cur:
         cur.execute(
             f"""
-            INSERT INTO projects (workspace_id, title, description, tech_stack, project_type)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO projects (workspace_id, title, description, tech_stack, project_type, coe_governance_enabled)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING {_PROJECT_FIELDS}
             """,
-            (workspace_id, title, description, Json(tech_stack), project_type),
+            (workspace_id, title, description, Json(tech_stack), project_type, coe_governance_enabled),
         )
         return cur.fetchone()
 
@@ -571,13 +612,20 @@ def delete_note(note_id: int) -> bool:
         return cur.rowcount > 0
 
 
-# ---------- CoE governance (workspaces feature, Phase 6a) ----------
+# ---------- CoE governance (workspaces feature, Phase 6a/6b) ----------
 #
 # risk_tier/risk_factors/risk_explanation/coe_roles/coe_phase_state on
 # `projects` are current-state caches (see sql/008_coe_governance.sql) —
 # each setter here does a full replace of its one field, same convention
 # as update_project. coe_control_events below is the append-only ledger
 # those overwrites would otherwise lose history from.
+#
+# coe_governance_enabled itself (sql/010, sql/011) lives on both
+# `workspaces` and `projects` now — set_workspace_coe_governance only
+# controls what a *new* project defaults to; set_project_coe_governance
+# is the one that actually governs an existing project day to day. Both
+# setters are called only after the step-up email code has verified
+# (api.py), never straight from a general settings save.
 
 def set_project_risk(project_id: int, risk_tier: str, risk_factors: Dict[str, str], risk_explanation: str) -> Optional[dict]:
     with _cursor() as cur:
@@ -617,6 +665,24 @@ def set_project_gate_state(project_id: int, coe_phase_state: Dict[str, Any]) -> 
             RETURNING {_PROJECT_FIELDS}
             """,
             (Json(coe_phase_state), project_id),
+        )
+        return cur.fetchone()
+
+
+def set_project_coe_governance(project_id: int, enabled: bool) -> Optional[dict]:
+    """The step-up-gated per-project switch (see PUT
+    /projects/{id}/coe-governance in api.py, which verifies a one-time
+    code before calling this). This is the one that actually governs the
+    project day to day — set_workspace_coe_governance only changes what
+    a *new* project in that workspace starts out as."""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE projects SET coe_governance_enabled = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING {_PROJECT_FIELDS}
+            """,
+            (enabled, project_id),
         )
         return cur.fetchone()
 

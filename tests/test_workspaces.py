@@ -52,18 +52,9 @@ def test_verify_app_key_rejects_malformed_without_raising():
 # ---------- workspace fields ----------
 
 def test_validate_workspace_fields_trims_and_requires_title():
-    title, target, desc, coe_on = ws.validate_workspace_fields({"title": "  My WS  ", "target": " t ", "description": " d "})
+    title, target, desc = ws.validate_workspace_fields({"title": "  My WS  ", "target": " t ", "description": " d "})
     assert (title, target, desc) == ("My WS", "t", "d")
-    assert coe_on is False  # defaults off when not sent
     print("OK: validate_workspace_fields_trims_and_requires_title")
-
-
-def test_validate_workspace_fields_coe_governance_enabled_is_a_plain_bool():
-    _t, _tg, _d, coe_on = ws.validate_workspace_fields({"title": "ok", "coe_governance_enabled": True})
-    assert coe_on is True
-    _t, _tg, _d, coe_off = ws.validate_workspace_fields({"title": "ok", "coe_governance_enabled": False})
-    assert coe_off is False
-    print("OK: validate_workspace_fields_coe_governance_enabled_is_a_plain_bool")
 
 
 def test_validate_workspace_fields_rejects_missing_title():
@@ -419,7 +410,6 @@ if __name__ == "__main__":
     test_verify_app_key_roundtrip()
     test_verify_app_key_rejects_malformed_without_raising()
     test_validate_workspace_fields_trims_and_requires_title()
-    test_validate_workspace_fields_coe_governance_enabled_is_a_plain_bool()
     test_validate_workspace_fields_rejects_missing_title()
     test_validate_workspace_fields_rejects_oversized_values()
     test_normalize_member_email_lowercases_and_trims()

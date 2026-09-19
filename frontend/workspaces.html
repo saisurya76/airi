@@ -517,16 +517,7 @@
             <label for="wsDescriptionInput">Description</label>
             <textarea id="wsDescriptionInput"></textarea>
           </div>
-          <div class="toggle-row">
-            <div>
-              <div style="font-size:14px; color:var(--text); font-weight:600;">CoE governance</div>
-              <div class="sub" style="margin:2px 0 0; font-size:12px;">Off = projects work exactly as they do now. On = every project in this workspace gets a risk tier, 6 gates, accountable roles, and a decision ledger.</div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="wsCoeGovernanceToggle" />
-              <span class="slider"></span>
-            </label>
-          </div>
+          <div id="wsCoeGovernanceBlock"></div>
           <div id="wsAutosaveNote" class="autosave-note">Changes save automatically.</div>
           <div id="wsSaveError" class="error hidden"></div>
         </div>
@@ -589,9 +580,9 @@
               and price the request itself in the dedicated wizard. Every project gets a Notes tab (a
               timestamped comment history). Once this workspace has 2+ API request projects, a
               "Project comparison" section appears above, comparing them side by side with its own
-              downloadable report. Turn on <b>CoE governance</b> in the workspace panel above to add a
-              risk tier, 6 gates, and accountable roles to every project here — it's a workspace-wide
-              switch, not a project type.
+              downloadable report. Every project also gets its own <b>Governance</b> tab — it starts
+              at whatever this workspace's CoE governance default is set to above, and can be turned
+              on or off independently for that one project from inside that tab.
             </div>
           </div>
           <div id="memberProjectNote" class="tab-note hidden">
@@ -1070,7 +1061,6 @@
   const wsTitleInput = document.getElementById("wsTitleInput");
   const wsTargetInput = document.getElementById("wsTargetInput");
   const wsDescriptionInput = document.getElementById("wsDescriptionInput");
-  const wsCoeGovernanceToggle = document.getElementById("wsCoeGovernanceToggle");
   const wsSaveError = document.getElementById("wsSaveError");
   let wsAutosaveTimer = null;
 
@@ -1079,8 +1069,8 @@
     wsTitleInput.value = currentWorkspace.title;
     wsTargetInput.value = currentWorkspace.target;
     wsDescriptionInput.value = currentWorkspace.description;
-    wsCoeGovernanceToggle.checked = !!currentWorkspace.coe_governance_enabled;
     wsSaveError.classList.add("hidden");
+    renderWsGovernanceToggle();
     applyWorkspaceRoleUi();
     renderMembers();
     renderProjects();
@@ -1095,19 +1085,47 @@
   // workspace/project identity (create/delete either, edit basic details)
   // or membership management — the backend enforces all of this with a
   // 403 regardless, this just keeps the UI from offering controls a
-  // member's every click would bounce off. CoE governance is one of
-  // those basic details: only the admin can flip the switch for
-  // everyone else in the workspace.
+  // member's every click would bounce off. The CoE governance toggle's
+  // admin-only-ness is baked in at render time by renderWsGovernanceToggle
+  // (called right before this, from openWorkspace, once currentWorkspace.role
+  // is known) rather than handled here.
   function applyWorkspaceRoleUi() {
     const isAdmin = currentWorkspace.role === "admin";
     document.getElementById("deleteWsBtn").classList.toggle("hidden", !isAdmin);
-    [wsTitleInput, wsTargetInput, wsDescriptionInput, wsCoeGovernanceToggle].forEach((el) => { el.disabled = !isAdmin; });
+    [wsTitleInput, wsTargetInput, wsDescriptionInput].forEach((el) => { el.disabled = !isAdmin; });
     document.getElementById("wsAutosaveNote").textContent = isAdmin
       ? "Changes save automatically."
       : "Only the workspace admin can edit these details.";
     document.getElementById("addMemberSection").classList.toggle("hidden", !isAdmin);
     document.getElementById("newProjectSection").classList.toggle("hidden", !isAdmin);
     document.getElementById("memberProjectNote").classList.toggle("hidden", isAdmin);
+  }
+
+  // The workspace's CoE governance switch is no longer part of the plain
+  // title/target/description autosave (see WorkspaceBody's docstring in
+  // api.py) — it only sets what a *new* project defaults to, and
+  // flipping it needs a step-up email code, so it gets its own
+  // request/confirm flow via governanceToggleRowHtml/wireGovernanceToggle
+  // (shared with the per-project switch in renderGovernancePanel) rather
+  // than riding along on scheduleWsAutosave.
+  function renderWsGovernanceToggle() {
+    const isAdmin = currentWorkspace.role === "admin";
+    document.getElementById("wsCoeGovernanceBlock").innerHTML = governanceToggleRowHtml(
+      "wsCoe", !!currentWorkspace.coe_governance_enabled, !isAdmin,
+      "CoE governance — default for new projects",
+      "Sets what a newly created project in this workspace starts with. Each project also has its own switch, in its own Governance tab, that can be flipped independently afterwards. Flipping either one needs a confirmation code emailed to you."
+    );
+    wireGovernanceToggle("wsCoe", {
+      getCurrentEnabled: () => !!currentWorkspace.coe_governance_enabled,
+      applyToggle: async (enabled, code) => {
+        const updated = await apiFetch(`/workspaces/${currentWorkspace.id}/coe-governance`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled, code }),
+        });
+        currentWorkspace = { ...currentWorkspace, ...updated };
+      },
+      onApplied: () => {}, // only changes the default for projects created from now on — nothing else on screen depends on it
+    });
   }
 
   function scheduleWsAutosave() {
@@ -1119,23 +1137,16 @@
     if (!currentWorkspace) return;
     const title = wsTitleInput.value.trim();
     if (!title) return; // don't autosave an empty required title; user is mid-edit
-    const coeGovernanceChanged = wsCoeGovernanceToggle.checked !== !!currentWorkspace.coe_governance_enabled;
     try {
       const updated = await apiFetch(`/workspaces/${currentWorkspace.id}`, {
         method: "PUT",
         body: JSON.stringify({
           title, target: wsTargetInput.value.trim(), description: wsDescriptionInput.value.trim(),
-          coe_governance_enabled: wsCoeGovernanceToggle.checked,
         }),
       });
       currentWorkspace = { ...currentWorkspace, ...updated };
       wsSaveError.classList.add("hidden");
-      // Every project's tab bar depends on this switch (Governance tab
-      // shown or not) — re-render them so flipping it takes effect
-      // immediately instead of on the next reload.
-      if (coeGovernanceChanged) renderProjects();
     } catch (e) {
-      wsCoeGovernanceToggle.checked = !!currentWorkspace.coe_governance_enabled; // revert the optimistic UI flip
       wsSaveError.textContent = e.message;
       wsSaveError.classList.remove("hidden");
     }
@@ -1145,7 +1156,6 @@
     el.addEventListener("input", scheduleWsAutosave);
     el.addEventListener("blur", saveWorkspaceFields);
   });
-  wsCoeGovernanceToggle.addEventListener("change", saveWorkspaceFields);
 
   document.getElementById("deleteWsBtn").addEventListener("click", () => {
     if (!currentWorkspace) return;
@@ -1406,7 +1416,6 @@
     const projects = currentWorkspace.projects || [];
     const isAdmin = currentWorkspace.role === "admin";
     projectsEmptyState.classList.toggle("hidden", projects.length > 0);
-    const coeOn = !!currentWorkspace.coe_governance_enabled;
     for (const p of projects) {
       const projectType = p.project_type || "api_request";
       const isApiProject = projectType === "api_request";
@@ -1430,9 +1439,11 @@
       // The 4 API-traffic tools (+ their Dashboard rollup) apply to an
       // "api_request" project, the two older demo-wizard types get a
       // single "Wizard" tab pointing at the dedicated page — and, on top
-      // of whichever of those a project already has, a "Governance" tab
-      // is appended whenever the workspace's CoE governance switch is on
-      // (see the toggle in the workspace panel), regardless of type.
+      // of whichever of those a project already has, every project
+      // (regardless of type) gets a "Governance" tab. What's inside that
+      // tab depends on THIS project's own coe_governance_enabled (see
+      // renderGovernancePanel) — the tab itself is always there so the
+      // on/off switch is somewhere to find, even when it's off.
       const typeTabsHtml = isApiProject ? `
           <button type="button" class="proj-tab-btn" data-tab="analyze">Standard</button>
           <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
@@ -1453,8 +1464,8 @@
           <div class="tab-note">${wizardNoteHtml(projectType)}</div>
         </div>
         `;
-      const governanceTabHtml = coeOn ? `<button type="button" class="proj-tab-btn" data-tab="governance">Governance</button>` : "";
-      const governancePanelHtml = coeOn ? `<div class="proj-tab-panel hidden" data-panel="governance"></div>` : "";
+      const governanceTabHtml = `<button type="button" class="proj-tab-btn" data-tab="governance">Governance</button>`;
+      const governancePanelHtml = `<div class="proj-tab-panel hidden" data-panel="governance"></div>`;
       body.innerHTML = `
         <div class="proj-tabs">
           <button type="button" class="proj-tab-btn active" data-tab="details">Details</button>
@@ -2208,21 +2219,134 @@
   function updateRiskChipSlot(rowEl, project) {
     const slot = rowEl && rowEl.querySelector(".risk-chip-slot");
     if (!slot) return;
-    const coeOn = !!currentWorkspace.coe_governance_enabled;
-    slot.innerHTML = (coeOn && project.risk_tier)
+    slot.innerHTML = (project.coe_governance_enabled && project.risk_tier)
       ? `<span class="stack-chip" style="color:${RISK_TIER_COLOR[project.risk_tier] || "var(--muted)"};">${escapeHtml((coeCatalog.risk_tiers[project.risk_tier] || {}).label || project.risk_tier)} risk</span>`
       : "";
   }
 
+  // ---------- CoE governance: step-up-gated on/off switch ----------
+  //
+  // Both levels — the workspace's default-for-new-projects switch
+  // (renderWsGovernanceToggle, in the settings panel) and a project's
+  // own switch (renderGovernancePanel, below) — share this exact flow:
+  // flipping the checkbox doesn't apply anything by itself. It requests
+  // a step-up code (POST /auth/coe-governance/request-code, emailed to
+  // the signed-in admin) and reveals a small code-entry row; only
+  // submitting the right code there actually calls the PUT endpoint.
+  // Cancelling, or a failed request/confirm, reverts the checkbox.
+
+  function governanceToggleRowHtml(idPrefix, checked, disabled, title, subtext) {
+    return `
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">${title}</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">${escapeHtml(subtext)}</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="${idPrefix}-toggle"${checked ? " checked" : ""}${disabled ? " disabled" : ""} />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="${idPrefix}-code-row" class="hidden" style="margin-top:10px;">
+        <p class="sub" style="margin:0 0 8px;">Enter the 6-digit code we just emailed you to confirm this change.</p>
+        <div class="row">
+          <div><input id="${idPrefix}-code-input" placeholder="123456" inputmode="numeric" maxlength="6" /></div>
+          <div style="flex:0;"><button type="button" id="${idPrefix}-code-confirm-btn">Confirm</button></div>
+          <div style="flex:0;"><button type="button" id="${idPrefix}-code-cancel-btn" class="secondary-btn">Cancel</button></div>
+        </div>
+        <div id="${idPrefix}-code-error" class="error hidden"></div>
+      </div>
+    `;
+  }
+
+  // opts: { getCurrentEnabled(): bool, applyToggle(enabled, code): Promise, onApplied(): void }
+  function wireGovernanceToggle(idPrefix, opts) {
+    const checkbox = document.getElementById(`${idPrefix}-toggle`);
+    if (!checkbox) return;
+    const codeRow = document.getElementById(`${idPrefix}-code-row`);
+    const codeInput = document.getElementById(`${idPrefix}-code-input`);
+    const confirmBtn = document.getElementById(`${idPrefix}-code-confirm-btn`);
+    const cancelBtn = document.getElementById(`${idPrefix}-code-cancel-btn`);
+    const errorEl = document.getElementById(`${idPrefix}-code-error`);
+    let pendingEnabled = null;
+
+    function resetCodeRow() {
+      codeRow.classList.add("hidden");
+      codeInput.value = "";
+      errorEl.classList.add("hidden");
+      pendingEnabled = null;
+    }
+
+    checkbox.addEventListener("change", async () => {
+      pendingEnabled = checkbox.checked;
+      errorEl.classList.add("hidden");
+      checkbox.disabled = true;
+      try {
+        await apiFetch("/auth/coe-governance/request-code", { method: "POST" });
+        codeRow.classList.remove("hidden");
+        codeInput.value = "";
+        codeInput.focus();
+      } catch (e) {
+        checkbox.checked = opts.getCurrentEnabled();
+        pendingEnabled = null;
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+
+    confirmBtn.addEventListener("click", async () => {
+      if (pendingEnabled === null) return;
+      errorEl.classList.add("hidden");
+      confirmBtn.disabled = true;
+      try {
+        await opts.applyToggle(pendingEnabled, codeInput.value.trim());
+        resetCodeRow();
+        opts.onApplied();
+      } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.classList.remove("hidden");
+      } finally {
+        confirmBtn.disabled = false;
+      }
+    });
+
+    cancelBtn.addEventListener("click", () => {
+      checkbox.checked = opts.getCurrentEnabled();
+      resetCodeRow();
+    });
+  }
+
   function renderGovernancePanel(project, panelEl, isAdmin, rowEl) {
     updateRiskChipSlot(rowEl, project);
+    const togglePrefix = `proj-${project.id}-coe`;
+    const toggleHtml = governanceToggleRowHtml(
+      togglePrefix, !!project.coe_governance_enabled, !isAdmin,
+      "CoE governance for this project",
+      project.coe_governance_enabled
+        ? "On — this project carries a risk tier, 6 gates, accountable roles, and a decision ledger. Turning it off keeps everything already recorded, it just stops surfacing/accepting new writes."
+        : "Off — this project works exactly like one with no CoE governance at all. Turn it on to add a risk tier, 6 gates, accountable roles, and a decision ledger."
+    );
+
+    if (!project.coe_governance_enabled) {
+      panelEl.innerHTML = `
+        ${toggleHtml}
+        <div class="empty-state" style="margin-top:12px;">CoE governance is off for this project.</div>
+      `;
+      wireGovernanceToggleFor(project, panelEl, isAdmin, rowEl, togglePrefix);
+      return;
+    }
+
     const idPrefix = `proj-${project.id}-risk`;
     if (!project.risk_tier) {
-      panelEl.innerHTML = riskFormHtml(idPrefix, project.risk_factors);
+      panelEl.innerHTML = `${toggleHtml}${riskFormHtml(idPrefix, project.risk_factors)}`;
+      wireGovernanceToggleFor(project, panelEl, isAdmin, rowEl, togglePrefix);
       wireRiskForm(project, panelEl, idPrefix, () => renderGovernancePanel(project, panelEl, isAdmin, rowEl));
       return;
     }
     panelEl.innerHTML = `
+      ${toggleHtml}
       ${riskBannerHtml(project)}
       <h3 style="margin-top:18px;">The 6 gates</h3>
       ${gatesListHtml(project)}
@@ -2230,6 +2354,7 @@
       <h3 style="margin-top:18px;"><span class="link-btn" data-ledger-toggle>History ▾</span></h3>
       <div class="hidden" data-ledger-list></div>
     `;
+    wireGovernanceToggleFor(project, panelEl, isAdmin, rowEl, togglePrefix);
     const retakeDetail = document.getElementById(`proj-${project.id}-retake`);
     panelEl.querySelector("[data-retake-toggle]").addEventListener("click", () => {
       retakeDetail.classList.toggle("hidden");
@@ -2241,6 +2366,27 @@
     wireGates(project, panelEl, () => renderGovernancePanel(project, panelEl, isAdmin, rowEl));
     if (isAdmin) wireRoles(project, panelEl);
     wireLedger(project, panelEl);
+  }
+
+  // Shared by every branch of renderGovernancePanel above — wires this
+  // project's own on/off switch (see wireGovernanceToggle) regardless of
+  // which content (empty state / risk form / full gates view) is
+  // currently showing alongside it. Applying a change re-renders the
+  // whole panel from scratch (renderGovernancePanel), which is the
+  // simplest way to flip between the "off" empty state and the "on"
+  // content without tracking that transition separately.
+  function wireGovernanceToggleFor(project, panelEl, isAdmin, rowEl, togglePrefix) {
+    wireGovernanceToggle(togglePrefix, {
+      getCurrentEnabled: () => !!project.coe_governance_enabled,
+      applyToggle: async (enabled, code) => {
+        const updated = await apiFetch(`/projects/${project.id}/coe-governance`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled, code }),
+        });
+        Object.assign(project, updated);
+      },
+      onApplied: () => renderGovernancePanel(project, panelEl, isAdmin, rowEl),
+    });
   }
 
   async function renderActionsPanel(project, panelEl) {

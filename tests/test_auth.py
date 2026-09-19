@@ -20,6 +20,8 @@ from airi.auth import (
     extract_bearer_token,
     CODE_LENGTH,
     ACCESS_CODE_LENGTH,
+    LOGIN_OTP_PURPOSE,
+    COE_TOGGLE_OTP_PURPOSE,
 )
 
 PEPPER = "test-pepper"
@@ -242,6 +244,16 @@ def test_admin_and_user_tokens_are_not_interchangeable():
     print("OK: admin_and_user_tokens_are_not_interchangeable")
 
 
+def test_otp_purpose_constants_are_distinct_and_nonempty():
+    """A sign-in code and a CoE-toggle step-up code for the same email
+    must never be able to satisfy each other (see
+    db.get_latest_unconsumed_code's purpose filter) — that only holds if
+    these two constants can never accidentally end up equal."""
+    assert LOGIN_OTP_PURPOSE and COE_TOGGLE_OTP_PURPOSE
+    assert LOGIN_OTP_PURPOSE != COE_TOGGLE_OTP_PURPOSE
+    print("OK: otp_purpose_constants_are_distinct_and_nonempty")
+
+
 def test_extract_bearer_token():
     assert extract_bearer_token("Bearer abc123") == "abc123"
     for bad in [None, "", "abc123", "Basic abc123"]:
@@ -270,5 +282,6 @@ if __name__ == "__main__":
     test_admin_token_rejects_empty()
     test_admin_token_expired()
     test_admin_and_user_tokens_are_not_interchangeable()
+    test_otp_purpose_constants_are_distinct_and_nonempty()
     test_extract_bearer_token()
     print("\nAll auth sanity checks passed.")
