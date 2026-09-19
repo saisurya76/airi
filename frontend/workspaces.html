@@ -15,6 +15,7 @@
     --safe: #3ecf8e;
     --warning: #f2b84b;
     --exceeded: #f2555a;
+    --inset: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -39,7 +40,7 @@
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   textarea, select, input {
     width: 100%;
-    background: #0f1115;
+    background: var(--inset);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: 8px;
@@ -125,7 +126,7 @@
   .app-key-row { display: flex; gap: 8px; align-items: center; }
   .app-key-row input { flex: 1; letter-spacing: 0.3em; font-size: 16px; }
   .eye-btn {
-    background: #0f1115;
+    background: var(--inset);
     border: 1px solid var(--border);
     color: var(--muted);
     border-radius: 8px;
@@ -140,7 +141,7 @@
 
   .ws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
   .ws-card {
-    background: #0f1115;
+    background: var(--inset);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 16px;
@@ -163,7 +164,7 @@
     justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
-    background: #0f1115;
+    background: var(--inset);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 12px;
@@ -186,7 +187,7 @@
   .project-type-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 2px; }
   .project-type-row label {
     display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
-    color: var(--muted); background: #0f1115; border: 1px solid var(--border);
+    color: var(--muted); background: var(--inset); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; cursor: pointer; flex: 1 1 150px;
   }
   .project-type-row input[type="radio"] { margin: 0; }
@@ -196,7 +197,7 @@
   .proj-tab-btn { margin: 0; background: transparent; color: var(--muted); border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .proj-tab-btn.active { background: var(--accent); color: #0f1115; }
   .proj-tab-panel.hidden { display: none; }
-  .sub-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: #0f1115; }
+  .sub-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: var(--inset); }
   .remove-row-btn { margin-top: 8px; }
   .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
   .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
@@ -211,7 +212,7 @@
   table.tool-table th { color: var(--muted); font-weight: 500; font-size: 11px; }
   table.tool-table tfoot td { font-weight: 700; border-bottom: none; padding-top: 10px; }
   .history-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; width: 100%; }
-  .history-entry { background: #0f1115; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+  .history-entry { background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
   .chart-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
   .chart-card { flex: 1 1 260px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
   .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 10px; font-weight: 600; }
@@ -220,7 +221,7 @@
   .bar-chart { display: flex; flex-direction: column; gap: 10px; }
   .bar-row { display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
   .bar-label { min-width: 70px; color: var(--muted); }
-  .bar-track { flex: 1 1 100px; background: #0f1115; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; height: 14px; }
+  .bar-track { flex: 1 1 100px; background: var(--inset); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; height: 14px; }
   .bar-fill { height: 100%; border-radius: 4px; }
   .bar-value { min-width: 70px; text-align: right; }
   .tab-note {
@@ -260,6 +261,62 @@
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
 </style>
+<script>
+  // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
+  // fetch the active theme + day/night settings plus the theme catalog,
+  // then set the 10 CSS custom properties this page's :root declares
+  // (bg/panel/border/text/muted/accent/safe/warning/exceeded/inset) at
+  // runtime. Placed in <head>, before <body>, so the fetch starts as
+  // early as possible and the flash of the built-in default (Midnight)
+  // look is brief. Fails open — the page keeps its default look — on
+  // any error, same convention as the site-visibility check elsewhere.
+  (function () {
+    var API_BASE = "https://airi-mvp-api.onrender.com";
+    var VARS = ["bg", "panel", "border", "text", "muted", "accent", "safe", "warning", "exceeded", "inset"];
+
+    function parseTime(hhmm) {
+      var parts = (hhmm || "").split(":");
+      return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+    }
+
+    function isNight(cfg) {
+      if (!cfg.theme_auto_day_night) return false;
+      var now = new Date();
+      var mins = now.getHours() * 60 + now.getMinutes();
+      var dayMins = parseTime(cfg.theme_day_start);
+      var nightMins = parseTime(cfg.theme_night_start);
+      if (dayMins === nightMins) return false;
+      if (dayMins < nightMins) return mins < dayMins || mins >= nightMins;
+      return mins >= nightMins && mins < dayMins;
+    }
+
+    function applyVars(vars) {
+      var root = document.documentElement.style;
+      for (var i = 0; i < VARS.length; i++) {
+        if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+    }
+
+    Promise.all([
+      fetch(API_BASE + "/config").then(function (r) { return r.json(); }),
+      fetch(API_BASE + "/theme-catalog").then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var cfg = results[0], catalog = results[1];
+      var themes = catalog.themes || [];
+      var active = null;
+      for (var i = 0; i < themes.length; i++) {
+        if (themes[i].key === cfg.theme) { active = themes[i]; break; }
+      }
+      if (!active) active = themes[0];
+      if (!active) return;
+      function apply() { applyVars(isNight(cfg) ? active.night : active.day); }
+      apply();
+      if (cfg.theme_auto_day_night) setInterval(apply, 60000);
+    }).catch(function () {
+      // Fail open — page keeps its built-in default (Midnight/night) look.
+    });
+  })();
+</script>
 </head>
 <body>
   <div class="wrap">

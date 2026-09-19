@@ -15,6 +15,7 @@
     --safe: #3ecf8e;
     --warning: #f2b84b;
     --exceeded: #f2555a;
+    --inset: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -37,7 +38,7 @@
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   input, textarea {
     width: 100%;
-    background: #0f1115;
+    background: var(--inset);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: 8px;
@@ -133,7 +134,7 @@
   .avatar-preview {
     width: 64px; height: 64px; border-radius: 50%;
     object-fit: cover; border: 1px solid var(--border);
-    background: #0f1115; flex: none;
+    background: var(--inset); flex: none;
   }
   .avatar-preview-empty {
     width: 64px; height: 64px; border-radius: 50%;
@@ -144,6 +145,26 @@
   .photo-actions { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
   .photo-actions input[type="file"] { font-size: 12.5px; }
   .photo-actions .secondary-btn { margin-top: 0; padding: 6px 12px; font-size: 12.5px; align-self: flex-start; }
+
+  .theme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .theme-swatch {
+    background: var(--inset);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .theme-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .theme-swatch-colors { display: flex; gap: 4px; margin-bottom: 6px; }
+  .theme-swatch-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.15); }
+  .theme-swatch-label { font-size: 12px; color: var(--text); font-weight: 600; }
+  .day-night-fields { margin-top: 14px; }
   .site-footer {
     margin-top: 8px;
     padding-top: 16px;
@@ -154,6 +175,62 @@
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
 </style>
+<script>
+  // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
+  // fetch the active theme + day/night settings plus the theme catalog,
+  // then set the 10 CSS custom properties this page's :root declares
+  // (bg/panel/border/text/muted/accent/safe/warning/exceeded/inset) at
+  // runtime. Placed in <head>, before <body>, so the fetch starts as
+  // early as possible and the flash of the built-in default (Midnight)
+  // look is brief. Fails open — the page keeps its default look — on
+  // any error, same convention as the site-visibility check elsewhere.
+  (function () {
+    var API_BASE = "https://airi-mvp-api.onrender.com";
+    var VARS = ["bg", "panel", "border", "text", "muted", "accent", "safe", "warning", "exceeded", "inset"];
+
+    function parseTime(hhmm) {
+      var parts = (hhmm || "").split(":");
+      return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+    }
+
+    function isNight(cfg) {
+      if (!cfg.theme_auto_day_night) return false;
+      var now = new Date();
+      var mins = now.getHours() * 60 + now.getMinutes();
+      var dayMins = parseTime(cfg.theme_day_start);
+      var nightMins = parseTime(cfg.theme_night_start);
+      if (dayMins === nightMins) return false;
+      if (dayMins < nightMins) return mins < dayMins || mins >= nightMins;
+      return mins >= nightMins && mins < dayMins;
+    }
+
+    function applyVars(vars) {
+      var root = document.documentElement.style;
+      for (var i = 0; i < VARS.length; i++) {
+        if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+    }
+
+    Promise.all([
+      fetch(API_BASE + "/config").then(function (r) { return r.json(); }),
+      fetch(API_BASE + "/theme-catalog").then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var cfg = results[0], catalog = results[1];
+      var themes = catalog.themes || [];
+      var active = null;
+      for (var i = 0; i < themes.length; i++) {
+        if (themes[i].key === cfg.theme) { active = themes[i]; break; }
+      }
+      if (!active) active = themes[0];
+      if (!active) return;
+      function apply() { applyVars(isNight(cfg) ? active.night : active.day); }
+      apply();
+      if (cfg.theme_auto_day_night) setInterval(apply, 60000);
+    }).catch(function () {
+      // Fail open — page keeps its built-in default (Midnight/night) look.
+    });
+  })();
+</script>
 </head>
 <body>
   <div class="wrap">
@@ -263,6 +340,42 @@
       <div id="visibilitySavedMsg" class="saved-msg hidden">Saved.</div>
     </div>
 
+    <div id="appearancePanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">Appearance</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">Pick a theme for the whole site. Each theme has a day and a night version — turn on automatic switching to move between them by time of day, or leave it off to always use the day version.</p>
+
+      <div id="themeGrid" class="theme-grid"></div>
+
+      <div class="toggle-row">
+        <div>
+          <div style="font-size:14px; color:var(--text); font-weight:600;">Automatic day/night switching</div>
+          <div class="sub" style="margin:2px 0 0; font-size:12px;">Switches every page between the theme's day and night colors at the times below.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoDayNightToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div id="dayNightFields" class="day-night-fields hidden">
+        <div class="row">
+          <div class="field">
+            <label for="dayStartInput">Day starts at</label>
+            <input id="dayStartInput" type="time" value="06:00" />
+          </div>
+          <div class="field">
+            <label for="nightStartInput">Night starts at</label>
+            <input id="nightStartInput" type="time" value="18:00" />
+          </div>
+        </div>
+        <div class="field-hint">Uses each visitor's own local time — there's no single time zone for the whole site.</div>
+      </div>
+
+      <button type="button" id="saveThemeBtn" style="width:100%;">Save appearance</button>
+      <div id="themeError" class="error hidden"></div>
+      <div id="themeSavedMsg" class="saved-msg hidden">Saved.</div>
+    </div>
+
     <div id="authorPanel" class="panel hidden">
       <div style="font-size:14px; color:var(--text); font-weight:600;">Author profile</div>
       <p class="sub" style="margin:4px 0 0; font-size:12px;">Shown publicly on the "Author" page — leave a field blank to hide it there.</p>
@@ -356,11 +469,25 @@
   const visibilitySavedMsg = document.getElementById("visibilitySavedMsg");
   let lastSavedVisibility = { show_author_link: true, show_license_wizard: true, show_sdlc_wizard: true };
 
+  const appearancePanel = document.getElementById("appearancePanel");
+  const themeGrid = document.getElementById("themeGrid");
+  const autoDayNightToggle = document.getElementById("autoDayNightToggle");
+  const dayNightFields = document.getElementById("dayNightFields");
+  const dayStartInput = document.getElementById("dayStartInput");
+  const nightStartInput = document.getElementById("nightStartInput");
+  const saveThemeBtn = document.getElementById("saveThemeBtn");
+  const themeError = document.getElementById("themeError");
+  const themeSavedMsg = document.getElementById("themeSavedMsg");
+  let themeCatalog = [];
+  let selectedTheme = "midnight";
+  let lastSavedTheme = { theme: "midnight", auto_day_night: false, day_start: "06:00", night_start: "18:00" };
+
   function showSignedOut() {
     loginPanel.classList.remove("hidden");
     dashboardPanel.classList.add("hidden");
     checklistPanel.classList.add("hidden");
     visibilityPanel.classList.add("hidden");
+    appearancePanel.classList.add("hidden");
     authorPanel.classList.add("hidden");
     signOutBtn.classList.add("hidden");
   }
@@ -370,6 +497,7 @@
     dashboardPanel.classList.remove("hidden");
     checklistPanel.classList.remove("hidden");
     visibilityPanel.classList.remove("hidden");
+    appearancePanel.classList.remove("hidden");
     authorPanel.classList.remove("hidden");
     signOutBtn.classList.remove("hidden");
   }
@@ -416,6 +544,10 @@
       showAuthorToggle.checked = lastSavedVisibility.show_author_link;
       showLicenseToggle.checked = lastSavedVisibility.show_license_wizard;
       showSdlcToggle.checked = lastSavedVisibility.show_sdlc_wizard;
+      if (data.theme) {
+        lastSavedTheme = data.theme;
+        hydrateThemeForm(lastSavedTheme);
+      }
       showSignedIn();
     } catch (e) {
       toggleError.textContent = e.message;
@@ -423,6 +555,92 @@
       showSignedIn();
     }
     loadAuthorProfile();
+    loadThemeCatalog();
+  }
+
+  // ---------- Appearance (theme) ----------
+
+  function hydrateThemeForm(settings) {
+    selectedTheme = settings.theme;
+    autoDayNightToggle.checked = settings.auto_day_night;
+    dayStartInput.value = settings.day_start;
+    nightStartInput.value = settings.night_start;
+    dayNightFields.classList.toggle("hidden", !settings.auto_day_night);
+    renderThemeGrid();
+  }
+
+  function renderThemeGrid() {
+    themeGrid.innerHTML = "";
+    themeCatalog.forEach((t) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "theme-swatch" + (t.key === selectedTheme ? " selected" : "");
+      btn.dataset.themeKey = t.key;
+      const colors = document.createElement("div");
+      colors.className = "theme-swatch-colors";
+      ["bg", "panel", "accent"].forEach((k) => {
+        const dot = document.createElement("span");
+        dot.className = "theme-swatch-dot";
+        dot.style.background = t.day[k];
+        colors.appendChild(dot);
+      });
+      const label = document.createElement("div");
+      label.className = "theme-swatch-label";
+      label.textContent = t.label;
+      btn.appendChild(colors);
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        selectedTheme = t.key;
+        renderThemeGrid();
+      });
+      themeGrid.appendChild(btn);
+    });
+  }
+
+  async function loadThemeCatalog() {
+    if (themeCatalog.length) return;
+    try {
+      const res = await fetch(`${API_BASE}/theme-catalog`);
+      const data = await res.json();
+      themeCatalog = data.themes || [];
+      renderThemeGrid();
+    } catch (e) {
+      themeError.textContent = "Couldn't load the theme list — try reloading this page.";
+      themeError.classList.remove("hidden");
+    }
+  }
+
+  async function saveTheme() {
+    themeError.classList.add("hidden");
+    themeSavedMsg.classList.add("hidden");
+    saveThemeBtn.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/admin/theme`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          theme: selectedTheme,
+          auto_day_night: autoDayNightToggle.checked,
+          day_start: dayStartInput.value || "06:00",
+          night_start: nightStartInput.value || "18:00",
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || "Could not save appearance.");
+      lastSavedTheme = data;
+      hydrateThemeForm(lastSavedTheme);
+      themeSavedMsg.classList.remove("hidden");
+      setTimeout(() => themeSavedMsg.classList.add("hidden"), 2500);
+    } catch (e) {
+      themeError.textContent = e.message;
+      themeError.classList.remove("hidden");
+    } finally {
+      saveThemeBtn.disabled = false;
+    }
   }
 
   // ---------- Author profile ----------
@@ -707,6 +925,10 @@
   showAuthorToggle.addEventListener("change", onVisibilityToggleChanged);
   showLicenseToggle.addEventListener("change", onVisibilityToggleChanged);
   showSdlcToggle.addEventListener("change", onVisibilityToggleChanged);
+  autoDayNightToggle.addEventListener("change", () => {
+    dayNightFields.classList.toggle("hidden", !autoDayNightToggle.checked);
+  });
+  saveThemeBtn.addEventListener("click", saveTheme);
 
   if (adminToken) {
     loadDashboard();

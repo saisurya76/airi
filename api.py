@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from airi import Archetype, analyze, build_report, list_supported_models, project
-from airi import author, comparison, consolidated_report, db, notes, runtime_config, tool_runs, vendor_pricing, workspaces as ws
+from airi import author, comparison, consolidated_report, db, notes, runtime_config, theme, tool_runs, vendor_pricing, workspaces as ws
 from airi.analyzer import build_result_from_counts
 from airi.auth import (
     CODE_TTL_SECONDS,
@@ -340,6 +340,17 @@ class AdminVisibilityBody(BaseModel):
     show_sdlc_wizard: bool = True
 
 
+class AdminThemeBody(BaseModel):
+    """Full replace, same semantics as AdminVisibilityBody — the admin
+    page always sends all four current values together. Real validation
+    (known theme key, HH:MM shape) happens in airi/theme.py, not here."""
+
+    theme: str = theme.DEFAULT_THEME
+    auto_day_night: bool = theme.DEFAULT_AUTO_DAY_NIGHT
+    day_start: str = theme.DEFAULT_DAY_START
+    night_start: str = theme.DEFAULT_NIGHT_START
+
+
 class AuthorProfileBody(BaseModel):
     """All optional/defaulted — a field left out is stored as "" (this
     is a full replace, same semantics as AdminConfigBody's test_mode;
@@ -465,11 +476,34 @@ def public_config():
     (test_mode: true). The show_* fields are the admin-settable site
     visibility toggles (see runtime_config.py) — every page that links to
     the Author profile or the two newer demo wizards checks these and
-    hides that link when its flag is false. Never exposes whether any
-    secret is actually configured — that's only in GET /admin/config,
-    behind the admin password."""
+    hides that link when its flag is false. theme/theme_auto_day_night/
+    theme_day_start/theme_night_start are the current appearance settings
+    (see airi/theme.py) — every page fetches this alongside GET
+    /theme-catalog to apply the right colors at load. Never exposes
+    whether any secret is actually configured — that's only in GET
+    /admin/config, behind the admin password."""
     test_mode, _source = runtime_config.get_test_mode()
-    return {"test_mode": test_mode, **runtime_config.get_all_visibility()}
+    theme_settings = theme.get_theme_settings()
+    return {
+        "test_mode": test_mode,
+        **runtime_config.get_all_visibility(),
+        "theme": theme_settings["theme"],
+        "theme_auto_day_night": theme_settings["auto_day_night"],
+        "theme_day_start": theme_settings["day_start"],
+        "theme_night_start": theme_settings["night_start"],
+    }
+
+
+@app.get("/theme-catalog")
+def theme_catalog():
+    """Public, unauthenticated: the full theme catalog (see
+    airi/theme.py), so no frontend page hardcodes a single hex value —
+    the same "server-defined catalog" convention as GET
+    /projects/tech-stack-categories. Combine with GET /config's theme/
+    theme_auto_day_night/theme_day_start/theme_night_start to know which
+    theme is active and whether to show its day or night variant right
+    now."""
+    return {"themes": theme.THEMES, "default_theme": theme.DEFAULT_THEME}
 
 
 @app.get("/models")
@@ -1336,6 +1370,7 @@ def admin_get_config(authorization: Optional[str] = Header(default=None)):
             "database": bool(os.environ.get("DATABASE_URL")),
         },
         "visibility": runtime_config.get_all_visibility(),
+        "theme": theme.get_theme_settings(),
     }
 
 
@@ -1369,6 +1404,22 @@ def admin_set_visibility(body: AdminVisibilityBody, authorization: Optional[str]
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return runtime_config.get_all_visibility()
+
+
+@app.post("/admin/theme")
+def admin_set_theme(body: AdminThemeBody, authorization: Optional[str] = Header(default=None)):
+    """Admin-only: sets the active theme, whether to auto-switch between
+    its day/night variants, and the two switch times — the admin page's
+    "Appearance" panel always sends all four together, same full-replace
+    convention as /admin/visibility. 400 on an unknown theme key or a
+    bad HH:MM time (see airi/theme.py)."""
+    _require_admin(authorization)
+    try:
+        return theme.set_theme_settings(body.theme, body.auto_day_night, body.day_start, body.night_start)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/author")

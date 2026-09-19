@@ -94,9 +94,18 @@ read that happens per-request.
 
 ### `GET /config`
 
-Public, unauthenticated. Returns `{"test_mode": bool}` — that's all;
-it never reveals whether any secret is actually configured (that's
-`GET /admin/config`, behind the admin password).
+Public, unauthenticated. Returns `test_mode`, the site-visibility
+flags, and the current appearance settings (`theme`,
+`theme_auto_day_night`, `theme_day_start`, `theme_night_start` — see
+"Appearance (themes)" below). It never reveals whether any secret is
+actually configured (that's `GET /admin/config`, behind the admin
+password).
+
+### `GET /theme-catalog`
+
+Public, unauthenticated. Returns `{"themes": [...], "default_theme":
+"midnight"}` — the full theme catalog, so no frontend page hardcodes a
+single color. See "Appearance (themes)" below.
 
 ### `POST /admin/login`
 
@@ -120,7 +129,9 @@ Requires `Authorization: Bearer <admin token>`. Returns:
     "google_key": false,
     "resend": true,
     "database": true
-  }
+  },
+  "visibility": { "show_author_link": true, "show_license_wizard": true, "show_sdlc_wizard": true },
+  "theme": { "theme": "midnight", "auto_day_night": false, "day_start": "06:00", "night_start": "18:00" }
 }
 ```
 
@@ -134,6 +145,16 @@ Requires the same admin token. Body: `{"test_mode": true}` (or
 shape as `GET /admin/config`'s `test_mode`/`source` fields, so the
 admin page can confirm what actually took effect. `503` if the database
 isn't configured.
+
+### `POST /admin/theme`
+
+Requires the admin token. Body `{"theme": "ocean", "auto_day_night":
+true, "day_start": "06:00", "night_start": "18:00"}` — a full replace,
+same convention as `POST /admin/config`: the admin page always sends
+all four current values together. `400` if `theme` isn't one of the 10
+catalog keys, or `day_start`/`night_start` isn't a 24-hour `"HH:MM"`
+time. `503` if the database isn't configured. See "Appearance
+(themes)" below.
 
 ### `GET /author`
 
@@ -189,6 +210,43 @@ enforces that a link is only ever rendered if it starts with `http://`
 or `https://`, and only renders an `email` value as a `mailto:` link if
 it's shaped like an email address. Anything else is simply omitted
 from the links row rather than shown as broken or unsafe.
+
+## Appearance (themes)
+
+`frontend/admin.html`'s "Appearance" panel picks a color theme for the
+whole site (all 14 static pages), from a fixed catalog of 10 themes
+defined in `airi/theme.py` — `THEMES`. Each theme has a **day** and a
+**night** variant, ten CSS custom properties each (`bg`, `panel`,
+`border`, `text`, `muted`, `accent`, `safe`, `warning`, `exceeded`,
+`inset`) — the same properties every page already declares in its
+`:root`. "Midnight" (the default) is exactly AIRI's original,
+unchanged dark look; picking no theme at all is identical to picking
+Midnight.
+
+**How a page applies it**: every one of the 14 pages has a small script
+in `<head>` that fetches `GET /config` (current settings) and `GET
+/theme-catalog` (the palette values) in parallel, then calls
+`document.documentElement.style.setProperty("--<name>", value)` for
+each of the 10 properties — no page hardcodes a single hex value. This
+runs before `<body>` to keep the flash of the default look brief, and
+fails open (keeps the default look) on any error, same convention as
+the site-visibility check.
+
+**Day/night switching**: off by default (`theme_auto_day_night:
+false`) — nothing changes for an existing deployment until an admin
+turns it on. Once on, each page re-evaluates every 60 seconds, using
+the *visitor's own local clock* (there's no single time zone for a
+site with visitors anywhere), against the admin-set `day_start`/
+`night_start` times (24-hour `"HH:MM"`, default `"06:00"`/`"18:00"`).
+
+**Storage**: four more rows in the existing `app_config` table (no new
+migration) — `theme`, `theme_auto_day_night`, `theme_day_start`,
+`theme_night_start` — same "missing row = default" convention as the
+test-mode toggle and the visibility flags.
+
+**Adding an 11th theme** is a Python-only change: add an entry to
+`THEMES` in `airi/theme.py` (10 day colors + 10 night colors); no
+frontend file needs touching.
 
 ## BYOK request shape
 

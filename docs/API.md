@@ -567,10 +567,12 @@ admin page (`frontend/admin.html`). Endpoint summary:
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /config` | none | `{"test_mode": bool}` — what the Exact-flavor frontend needs to decide what to show a signed-in user |
+| `GET /config` | none | `{"test_mode": bool, "theme": str, "theme_auto_day_night": bool, "theme_day_start": "HH:MM", "theme_night_start": "HH:MM", ...}` — what every frontend page needs to decide what to show and how to look |
+| `GET /theme-catalog` | none | `{"themes": [...], "default_theme": str}` — the full 10-theme catalog (day + night color variants), see [docs/ADMIN.md](ADMIN.md#appearance-themes) |
 | `POST /admin/login` | `{"password": "..."}` in body | Returns a 12h admin token on success (`401` wrong password, `503` not configured) |
-| `GET /admin/config` | `Authorization: Bearer <admin token>` | Current `test_mode` + its `source` (`"admin"`/`"env"`/`"default"`), plus a read-only checklist of which secrets are configured |
+| `GET /admin/config` | `Authorization: Bearer <admin token>` | Current `test_mode` + its `source` (`"admin"`/`"env"`/`"default"`), a read-only checklist of which secrets are configured, plus the current `theme` settings |
 | `POST /admin/config` | same | Body `{"test_mode": bool}` — sets an admin override (persists in Postgres); `503` if the database isn't configured |
+| `POST /admin/theme` | `Authorization: Bearer <admin token>` | Body `{"theme": str, "auto_day_night": bool, "day_start": "HH:MM", "night_start": "HH:MM"}` — a full replace, same convention as `/admin/visibility`; `400` on an unknown theme key or a bad time, `503` if the database isn't configured |
 | `GET /author` | none | The founder/author profile shown on `frontend/author.html` — all-empty strings if nothing's been set |
 | `POST /admin/author` | `Authorization: Bearer <admin token>` | Body is the full profile (see [docs/ADMIN.md](ADMIN.md#author-profile)) — a full replace; `400` on an invalid field (nothing is written), `503` if the database isn't configured |
 

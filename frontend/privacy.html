@@ -12,6 +12,10 @@
     --text: #e8e9ec;
     --muted: #9aa0ac;
     --accent: #6ea8fe;
+    --safe: #3ecf8e;
+    --warning: #f2b84b;
+    --exceeded: #f2555a;
+    --inset: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -61,6 +65,62 @@
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
 </style>
+<script>
+  // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
+  // fetch the active theme + day/night settings plus the theme catalog,
+  // then set the 10 CSS custom properties this page's :root declares
+  // (bg/panel/border/text/muted/accent/safe/warning/exceeded/inset) at
+  // runtime. Placed in <head>, before <body>, so the fetch starts as
+  // early as possible and the flash of the built-in default (Midnight)
+  // look is brief. Fails open — the page keeps its default look — on
+  // any error, same convention as the site-visibility check elsewhere.
+  (function () {
+    var API_BASE = "https://airi-mvp-api.onrender.com";
+    var VARS = ["bg", "panel", "border", "text", "muted", "accent", "safe", "warning", "exceeded", "inset"];
+
+    function parseTime(hhmm) {
+      var parts = (hhmm || "").split(":");
+      return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+    }
+
+    function isNight(cfg) {
+      if (!cfg.theme_auto_day_night) return false;
+      var now = new Date();
+      var mins = now.getHours() * 60 + now.getMinutes();
+      var dayMins = parseTime(cfg.theme_day_start);
+      var nightMins = parseTime(cfg.theme_night_start);
+      if (dayMins === nightMins) return false;
+      if (dayMins < nightMins) return mins < dayMins || mins >= nightMins;
+      return mins >= nightMins && mins < dayMins;
+    }
+
+    function applyVars(vars) {
+      var root = document.documentElement.style;
+      for (var i = 0; i < VARS.length; i++) {
+        if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+    }
+
+    Promise.all([
+      fetch(API_BASE + "/config").then(function (r) { return r.json(); }),
+      fetch(API_BASE + "/theme-catalog").then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var cfg = results[0], catalog = results[1];
+      var themes = catalog.themes || [];
+      var active = null;
+      for (var i = 0; i < themes.length; i++) {
+        if (themes[i].key === cfg.theme) { active = themes[i]; break; }
+      }
+      if (!active) active = themes[0];
+      if (!active) return;
+      function apply() { applyVars(isNight(cfg) ? active.night : active.day); }
+      apply();
+      if (cfg.theme_auto_day_night) setInterval(apply, 60000);
+    }).catch(function () {
+      // Fail open — page keeps its built-in default (Midnight/night) look.
+    });
+  })();
+</script>
 </head>
 <body>
   <div class="wrap">
