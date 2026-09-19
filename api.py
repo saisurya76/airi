@@ -343,12 +343,20 @@ class AdminVisibilityBody(BaseModel):
 class AdminThemeBody(BaseModel):
     """Full replace, same semantics as AdminVisibilityBody — the admin
     page always sends all four current values together. Real validation
-    (known theme key, HH:MM shape) happens in airi/theme.py, not here."""
+    (known theme key, HH:MM shape) happens in airi/theme.py, not here.
 
-    theme: str = theme.DEFAULT_THEME
+    NOTE: the `theme` field is assigned last, deliberately — inside a
+    class body, `theme: str = theme.DEFAULT_THEME` rebinds the name
+    `theme` in this local namespace to that *string value* the moment it
+    runs, shadowing the `airi.theme` module for the rest of the class
+    body. Reference `theme.<anything>` from the module in every other
+    field first; only the field actually named `theme` can safely be
+    last."""
+
     auto_day_night: bool = theme.DEFAULT_AUTO_DAY_NIGHT
     day_start: str = theme.DEFAULT_DAY_START
     night_start: str = theme.DEFAULT_NIGHT_START
+    theme: str = theme.DEFAULT_THEME
 
 
 class AuthorProfileBody(BaseModel):
