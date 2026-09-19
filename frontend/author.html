@@ -16,6 +16,7 @@
     --warning: #f2b84b;
     --exceeded: #f2555a;
     --inset: #0f1115;
+    --on-accent: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -43,7 +44,7 @@
     width: 128px; height: 128px; border-radius: 50%;
     margin: 0 auto 18px; display: flex; align-items: center; justify-content: center;
     background: linear-gradient(135deg, var(--accent), #9b7ef2);
-    color: #0f1115; font-size: 48px; font-weight: 700;
+    color: var(--on-accent); font-size: 48px; font-weight: 700;
   }
   h1 { font-size: 24px; margin: 0 0 2px; }
   .role-line { color: var(--text); font-size: 15px; margin: 0 0 6px; font-weight: 600; }
@@ -121,10 +122,26 @@
       return mins >= nightMins && mins < dayMins;
     }
 
+    function luminance(hex) {
+      var h = (hex || "").replace("#", "");
+      var r = parseInt(h.substr(0, 2), 16) || 0;
+      var g = parseInt(h.substr(2, 2), 16) || 0;
+      var b = parseInt(h.substr(4, 2), 16) || 0;
+      return (r * 299 + g * 587 + b * 114) / 1000;
+    }
+
     function applyVars(vars) {
       var root = document.documentElement.style;
       for (var i = 0; i < VARS.length; i++) {
         if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+      // Buttons, badges and active nav pills paint their text on top of
+      // --accent, and accent hues range from pale (night variants) to
+      // richly saturated (day variants, chosen for contrast against a
+      // white page) — one hardcoded text color can't read on both, so
+      // pick light or dark text from the accent's own brightness.
+      if (vars && vars.accent) {
+        root.setProperty("--on-accent", luminance(vars.accent) < 140 ? "#f5f6fa" : "#0f1115");
       }
     }
 

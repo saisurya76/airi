@@ -23,6 +23,7 @@
     --warning: #f2b84b;
     --exceeded: #f2555a;
     --inset: #0f1115;
+    --on-accent: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -42,7 +43,7 @@
   h2 .step-num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 22px; height: 22px; border-radius: 50%;
-    background: var(--accent); color: #0f1115; font-size: 12px; font-weight: 700;
+    background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 700;
     margin-right: 8px; vertical-align: middle;
   }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
@@ -85,7 +86,7 @@
   }
   .cta-row { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; gap: 14px; flex-wrap: wrap; }
   .cta-row a.btn {
-    background: var(--accent); color: #0f1115; text-decoration: none;
+    background: var(--accent); color: var(--on-accent); text-decoration: none;
     border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 600;
   }
   .cta-row a.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
@@ -130,10 +131,26 @@
       return mins >= nightMins && mins < dayMins;
     }
 
+    function luminance(hex) {
+      var h = (hex || "").replace("#", "");
+      var r = parseInt(h.substr(0, 2), 16) || 0;
+      var g = parseInt(h.substr(2, 2), 16) || 0;
+      var b = parseInt(h.substr(4, 2), 16) || 0;
+      return (r * 299 + g * 587 + b * 114) / 1000;
+    }
+
     function applyVars(vars) {
       var root = document.documentElement.style;
       for (var i = 0; i < VARS.length; i++) {
         if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+      // Buttons, badges and active nav pills paint their text on top of
+      // --accent, and accent hues range from pale (night variants) to
+      // richly saturated (day variants, chosen for contrast against a
+      // white page) — one hardcoded text color can't read on both, so
+      // pick light or dark text from the accent's own brightness.
+      if (vars && vars.accent) {
+        root.setProperty("--on-accent", luminance(vars.accent) < 140 ? "#f5f6fa" : "#0f1115");
       }
     }
 

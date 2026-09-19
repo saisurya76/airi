@@ -16,6 +16,7 @@
     --warning: #f2b84b;
     --exceeded: #f2555a;
     --inset: #0f1115;
+    --on-accent: #0f1115;
   }
   * { box-sizing: border-box; }
   body {
@@ -52,7 +53,7 @@
   button {
     margin-top: 18px;
     background: var(--accent);
-    color: #0f1115;
+    color: var(--on-accent);
     border: none;
     border-radius: 8px;
     padding: 12px 18px;
@@ -123,7 +124,7 @@
     font-weight: 600;
     cursor: pointer;
   }
-  .flavor-pill.active { background: var(--accent); color: #0f1115; }
+  .flavor-pill.active { background: var(--accent); color: var(--on-accent); }
   .auth-status { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
   .link-btn {
     margin: 0;
@@ -246,12 +247,12 @@
   .top-nav a:hover { color: var(--accent); text-decoration: underline; }
   .top-nav a.author-link {
     background: linear-gradient(135deg, var(--accent), #9b7ef2);
-    color: #0f1115;
+    color: var(--on-accent);
     padding: 5px 14px;
     border-radius: 999px;
     font-weight: 700;
   }
-  .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: #0f1115; }
+  .top-nav a.author-link:hover { text-decoration: none; opacity: 0.88; color: var(--on-accent); }
   a.workspaces-link {
     background: rgba(110,168,254,0.12);
     border: 1px solid rgba(110,168,254,0.5);
@@ -263,8 +264,8 @@
     font-size: 12px;
   }
   a.workspaces-link:hover { background: rgba(110,168,254,0.22); text-decoration: none; color: var(--accent); }
-  a.workspaces-link.active { background: var(--accent); color: #0f1115; border-color: var(--accent); }
-  a.workspaces-link.active:hover { opacity: 0.88; color: #0f1115; }
+  a.workspaces-link.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  a.workspaces-link.active:hover { opacity: 0.88; color: var(--on-accent); }
   .site-footer {
     margin-top: 40px;
     padding-top: 16px;
@@ -305,10 +306,26 @@
       return mins >= nightMins && mins < dayMins;
     }
 
+    function luminance(hex) {
+      var h = (hex || "").replace("#", "");
+      var r = parseInt(h.substr(0, 2), 16) || 0;
+      var g = parseInt(h.substr(2, 2), 16) || 0;
+      var b = parseInt(h.substr(4, 2), 16) || 0;
+      return (r * 299 + g * 587 + b * 114) / 1000;
+    }
+
     function applyVars(vars) {
       var root = document.documentElement.style;
       for (var i = 0; i < VARS.length; i++) {
         if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+      }
+      // Buttons, badges and active nav pills paint their text on top of
+      // --accent, and accent hues range from pale (night variants) to
+      // richly saturated (day variants, chosen for contrast against a
+      // white page) — one hardcoded text color can't read on both, so
+      // pick light or dark text from the accent's own brightness.
+      if (vars && vars.accent) {
+        root.setProperty("--on-accent", luminance(vars.accent) < 140 ? "#f5f6fa" : "#0f1115");
       }
     }
 
