@@ -188,14 +188,22 @@
   }
   /* A project's title bar (.project-summary) and its expanded content
      (.project-body) used to share one flat background, so the header
-     visually blended into whatever tab content was open beneath it.
-     Now the row is a two-band card: the title strip uses --panel (the
-     same "raised" tone as the top-level page panels, so it reads as a
-     header), the body uses --inset (a "sunken" tone) as a backdrop —
-     which in turn makes the .panel-styled cards already used inside
-     tabs (Governance's risk/gate cards, Dashboard stat boxes, etc.)
-     pop again on top of it, since those are --panel too. overflow:
-     hidden clips both bands to the row's own rounded corners. */
+     visually blended into whatever tab content was open beneath it —
+     and using plain --panel for the title bar wasn't enough on its
+     own, because #projectsList's own wrapping section is ALSO --panel
+     (see the .panel around it in the markup), so the title bar was
+     matching its own container's color, not just failing to contrast
+     with the body. color-mix() tints the title bar with a bit of
+     --accent instead of using a flat token, so it's always visibly
+     distinct from both the outer .panel wrapper AND --inset below it,
+     in every theme, rather than relying on how far apart that theme's
+     own --panel/--inset/--bg values happen to be (--inset equals --bg
+     exactly in every theme's dark/night variant — see airi/theme.py —
+     so a plain --panel/--inset pairing is the only real contrast
+     there). Both --accent and --panel are theme CSS variables, so this
+     re-tints itself automatically on every theme change, same as
+     everything else on the page. overflow: hidden clips both bands to
+     the row's own rounded corners. */
   .project-row {
     display: flex;
     flex-direction: column;
@@ -211,7 +219,8 @@
     justify-content: space-between;
     gap: 10px;
     cursor: pointer;
-    background: var(--panel);
+    background: var(--panel); /* fallback for browsers without color-mix() support */
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel));
     padding: 10px 12px;
   }
   .project-row .project-summary .stack-chip { font-size: 11px; color: var(--muted); }
@@ -302,6 +311,10 @@
   }
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
+  @media (max-width: 480px) {
+    .tech-grid { grid-template-columns: 1fr; }
+    .result-grid { grid-template-columns: 1fr; }
+  }
 </style>
 <script>
   // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
@@ -2118,6 +2131,63 @@
     return { advisory: "Advisory", required_justification: "Needs a reason to override", mandatory: "Mandatory" }[level] || "";
   }
 
+  // A one-line, always-current verdict computed fresh from the gates'
+  // actual state every time the Governance tab re-renders (gate saved,
+  // risk retaken, role reassigned — renderGovernancePanel re-runs after
+  // all three) — never a separate field to keep in sync by hand.
+  // Priority mirrors what actually stops a project from shipping:
+  //   1. A Mandatory-at-this-tier gate not yet cleared — the real
+  //      blocker (only the accountable role can clear it).
+  //   2. Any flagged gate, even an advisory one — not blocking, but a
+  //      real concern someone recorded a reason for.
+  //   3. Anything else still short of cleared — just not finished yet.
+  //   4. Every gate cleared.
+  function governanceConclusionHtml(project) {
+    const gates = coeCatalog.gates || [];
+    if (!gates.length) return "";
+    const phaseState = project.coe_phase_state || {};
+    const enforcementForTier = (coeCatalog.enforcement_lookup || {})[project.risk_tier] || {};
+
+    const rows = gates.map((gate) => ({
+      label: gate.label,
+      status: (phaseState[gate.key] || {}).status || "not_started",
+      level: enforcementForTier[gate.key],
+    }));
+    const blocking = rows.filter((r) => r.level === "mandatory" && r.status !== "cleared");
+    const flagged = rows.filter((r) => r.status === "flagged");
+    const outstanding = rows.filter((r) => r.status !== "cleared");
+    const tierLabel = (coeCatalog.risk_tiers[project.risk_tier] || {}).label || project.risk_tier;
+
+    let verdict, detail, colorVar;
+    if (blocking.length) {
+      verdict = "Blocked";
+      colorVar = "var(--exceeded)";
+      const names = blocking.map((r) => escapeHtml(r.label)).join(", ");
+      detail = `${names} ${blocking.length === 1 ? "is" : "are"} Mandatory at ${escapeHtml(tierLabel)} risk and not yet cleared — only the accountable role can clear ${blocking.length === 1 ? "it" : "them"}.`;
+    } else if (flagged.length) {
+      verdict = "Needs attention";
+      colorVar = "var(--warning)";
+      const names = flagged.map((r) => escapeHtml(r.label)).join(", ");
+      detail = `${names} flagged — see the note on each for why.`;
+    } else if (outstanding.length) {
+      verdict = "In progress";
+      colorVar = "var(--warning)";
+      const names = outstanding.map((r) => escapeHtml(r.label)).join(", ");
+      detail = `${rows.length - outstanding.length} of ${rows.length} gates cleared. Still open: ${names}.`;
+    } else {
+      verdict = "Fully cleared";
+      colorVar = "var(--safe)";
+      detail = `All ${rows.length} gates cleared — nothing outstanding right now.`;
+    }
+
+    return `
+      <div style="margin-top:14px; border-left:3px solid ${colorVar}; padding:2px 0 2px 12px;">
+        <div style="font-size:14px; font-weight:700; color:${colorVar};">${escapeHtml(verdict)}</div>
+        <div class="sub" style="margin-top:2px;">${detail}</div>
+      </div>
+    `;
+  }
+
   // ---------- Live AI Guide per gate (Phase 6c) — opt-in, BYOK-only ----------
   //
   // Reuses the exact same BYOK_ANTHROPIC_KEY/BYOK_GOOGLE_KEY localStorage
@@ -2459,6 +2529,7 @@
     panelEl.innerHTML = `
       ${toggleHtml}
       ${riskBannerHtml(project)}
+      ${governanceConclusionHtml(project)}
       <h3 style="margin-top:18px;">The 6 gates</h3>
       ${gatesListHtml(project)}
       ${isAdmin ? rolesHtml(project) : ""}

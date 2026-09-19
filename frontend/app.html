@@ -276,6 +276,9 @@
   }
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
+  @media (max-width: 480px) {
+    .result-grid { grid-template-columns: 1fr; }
+  }
 </style>
 <script>
   // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
