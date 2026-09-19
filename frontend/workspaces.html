@@ -174,7 +174,7 @@
   .switch input:checked + .slider:before { transform: translateX(20px); }
   .switch input:disabled + .slider { opacity: 0.5; cursor: default; }
 
-  .member-row, .project-row {
+  .member-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -186,10 +186,36 @@
     padding: 10px 12px;
     margin-top: 8px;
   }
-  .project-row { flex-direction: column; align-items: stretch; }
-  .project-row .project-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; }
+  /* A project's title bar (.project-summary) and its expanded content
+     (.project-body) used to share one flat background, so the header
+     visually blended into whatever tab content was open beneath it.
+     Now the row is a two-band card: the title strip uses --panel (the
+     same "raised" tone as the top-level page panels, so it reads as a
+     header), the body uses --inset (a "sunken" tone) as a backdrop —
+     which in turn makes the .panel-styled cards already used inside
+     tabs (Governance's risk/gate cards, Dashboard stat boxes, etc.)
+     pop again on top of it, since those are --panel too. overflow:
+     hidden clips both bands to the row's own rounded corners. */
+  .project-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .project-row .project-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    background: var(--panel);
+    padding: 10px 12px;
+  }
   .project-row .project-summary .stack-chip { font-size: 11px; color: var(--muted); }
-  .project-body { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .project-body { background: var(--inset); padding: 12px; border-top: 1px solid var(--border); }
   .required-mark { color: var(--exceeded); }
   .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 

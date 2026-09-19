@@ -185,9 +185,18 @@ def seed_demo_data(secret: str) -> Dict[str, Any]:
     _seed_coe(
         p1["id"], owner_id, member_id,
         risk_answers={"data": "confidential", "autonomy": "human_in_loop", "exposure": "external", "reversibility": "easily_reversible"},
+        # All 6 gates touched, at Standard tier (no Mandatory gate here —
+        # see COE_GATES/ENFORCEMENT_LOOKUP — so clearing any of these
+        # doesn't require a specific accountable role, just a signed-in
+        # active member) — a full, healthy lifecycle, paired below with
+        # Fraud Triage's High-tier, still-blocked one for contrast.
         gate_plan={
             "frame": {"status": "cleared", "note": "Approved: reduces average handle time, human always sends the final reply."},
-            "design": {"status": "in_progress", "note": "Data-retention review with legal still open."},
+            "design": {"status": "cleared", "note": "Data-retention review with legal closed out — 90-day retention agreed with support ops."},
+            "verify": {"status": "cleared", "note": "Reviewed 200 sample transcripts — tone and accuracy both within target, no policy violations found."},
+            "release": {"status": "cleared", "note": "Rolled out to 100% of the support queue on Sept 1 — no rollback triggers hit in the first week."},
+            "run": {"status": "in_progress", "note": "Live in production — weekly quality spot-checks ongoing, next review scheduled end of month."},
+            "evolve_retire": {"status": "not_started", "note": "Nothing to evolve yet — revisit once there's a cost or quality reason to change the model."},
         },
         roles={"business_owner": owner_id, "technical_owner": member_id, "governance_owner": owner_id},
     )
@@ -213,10 +222,22 @@ def seed_demo_data(secret: str) -> Dict[str, Any]:
     _seed_coe(
         p2["id"], owner_id, member_id,
         risk_answers={"data": "regulated", "autonomy": "autonomous", "exposure": "external", "reversibility": "hard_to_reverse"},
+        # All 6 gates touched here too, but the story is different on
+        # purpose: Design/Verify/Release are Mandatory at High tier (only
+        # the resolved accountable role can clear one — see
+        # ENFORCEMENT_LOOKUP), and Verify is left FLAGGED rather than
+        # cleared specifically so that identity-enforcement restriction
+        # has something real to bump into live — Release, Run, and
+        # Evolve-or-retire are explicit "not_started" writes (with a
+        # note explaining why), not just left blank, so the History tab
+        # shows the reasoning rather than silence.
         gate_plan={
             "frame": {"status": "cleared", "note": "Business case approved by Risk & Fraud leadership."},
             "design": {"status": "cleared", "note": "Model, thresholds, and escalation path signed off."},
             "verify": {"status": "flagged", "note": "False-positive rate still 4% at 3x expected peak load — holding until the next model iteration lands, target is under 2%."},
+            "release": {"status": "not_started", "note": "Blocked — Release can't start until Verify clears."},
+            "run": {"status": "not_started", "note": "Not live yet — stays paused until Release clears."},
+            "evolve_retire": {"status": "not_started", "note": "Too early to consider — revisit after the first stable release."},
         },
         roles={"business_owner": owner_id, "technical_owner": member_id, "governance_owner": owner_id},
     )
