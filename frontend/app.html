@@ -440,23 +440,22 @@
 
     <div id="testModeNote" class="panel hidden">
       <p class="info-note" style="margin:0;">
-        This deployment is in <b style="color:var(--text);">testing mode</b> — Exact requests use
-        AIRI's own shared Anthropic/Gemini keys, so there's nothing for you to configure here.
-        One feature is different: the optional <b style="color:var(--text);">Live AI Guide</b>
-        in a project's Governance tab (Workspaces) always uses your own key, regardless of this
-        setting — click "Manage keys" above if you want to use it.
+        Exact mode is ready to use here — no key needed. One feature is different: the optional
+        <b style="color:var(--text);">Live AI Guide</b> checklist inside a project's Governance tab
+        (Workspaces) always needs your own Anthropic or Google (Gemini) key, since it generates a
+        real, tailored result rather than a quick check. Click "Manage keys" above if you'd like to
+        add one and use it.
       </p>
     </div>
 
     <div id="byokPanel" class="panel hidden">
       <p class="sub" style="margin:0 0 14px;">
-        Two features use a provider key you <b style="color:var(--text);">bring yourself</b> rather
-        than one AIRI holds: Exact mode here (unless this deployment is in testing mode, which uses
-        AIRI's own shared key instead), and the optional Live AI Guide in a project's Governance tab
-        (Workspaces) — which always uses your own key, even in testing mode, since it's a real
-        generation call rather than a free check. Your key is stored only in this browser
-        (localStorage) — it's sent to AIRI only with the one request that needs it, for that one
-        provider call. AIRI never stores it server-side or logs it.
+        AIRI doesn't use any AI on its own — every estimate on this page is calculated locally, with
+        no model call at all. The only two things that ever do talk to a real AI provider are Exact
+        mode here, and the optional Live AI Guide checklist inside a project's Governance tab
+        (Workspaces) — and both only run if you add your own Anthropic or Google (Gemini) key below.
+        Your key stays in this browser: it's sent to AIRI only with the one request that needs it,
+        never stored, and never logged.
       </p>
       <div class="byok-row">
         <label for="byokAnthropicInput" style="margin:0;">Anthropic API key</label>

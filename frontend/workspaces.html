@@ -2622,8 +2622,8 @@
 
     if (tool === "analyze" || tool === "exact") {
       const byokNote = tool === "exact" && testMode === false
-        ? `<div class="tab-note">This deployment is in BYOK mode — the Anthropic/Google key you saved on the main page (if any) is reused here. <a href="app.html" style="color:var(--accent);">Manage keys</a>.</div>`
-        : (tool === "exact" ? `<div class="tab-note">This deployment is in testing mode — Exact calls use AIRI's own shared keys here, nothing to configure.</div>` : "");
+        ? `<div class="tab-note">Exact mode uses the Anthropic/Google key you saved on the main page (if any). <a href="app.html" style="color:var(--accent);">Manage keys</a>.</div>`
+        : (tool === "exact" ? `<div class="tab-note">Exact mode is ready to use here — no key needed.</div>` : "");
       panelEl.innerHTML = `
         <div class="field"><label for="${idPrefix}-prompt">Prompt</label><textarea id="${idPrefix}-prompt" placeholder="Paste or write the request..."></textarea></div>
         <div class="row">
