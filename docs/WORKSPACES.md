@@ -1,4 +1,4 @@
-# Workspaces & Projects (Phases 1–5)
+# Workspaces & Projects (Phases 1–6)
 
 `frontend/workspaces.html` lets a signed-in user organize their work
 into **workspaces** (a team/initiative) containing **projects** (a
@@ -9,9 +9,11 @@ AIRI's tools runnable and saved inside a project; Phase 3 added a
 Dashboard tab, a Notes tab, and an Actions tab with a downloadable
 consolidated PDF report; Phase 4 added a cross-project comparison tab
 with its own PDF report, plus per-saved-run PDF downloads; Phase 5
-(this delivery — see "Team-member access" below) gives a workspace's
-team members their own real, role-scoped access instead of just an
-email notification. No further phases are planned as of this delivery.
+gave a workspace's team members their own real, role-scoped access
+instead of just an email notification; Phase 6 (this delivery — see
+"CoE Governance" below) adds a 4th project type for running an AI
+initiative through a risk-tiered governance model. No further phases
+are planned as of this delivery.
 
 Like Exact mode, this entire feature requires a signed-in session — a
 workspace's admin signs in with email + OTP (see
@@ -468,6 +470,91 @@ over rather than just paused.
 
 (`POST`/`DELETE /workspaces/{id}/members` are documented under "Team
 members" above — Phase 5 changed their behavior, not their shape.)
+
+## CoE Governance (Phase 6)
+
+A 4th `project_type`, `coe_initiative`, for running an AI initiative
+through a lightweight, risk-tiered governance model instead of a
+generic checklist — designed to need **zero setup** for a low-risk
+initiative and to get genuinely hard to bypass for a high-risk one.
+`sql/008_coe_governance.sql` adds five columns to `projects`
+(`risk_tier`, `risk_factors`, `risk_explanation`, `coe_roles`,
+`coe_phase_state` — all unused/NULL for the other three project types,
+same convention as `tech_stack`) plus one new append-only table,
+`coe_control_events`, for the decision ledger. The catalogs
+themselves (risk factors, gates, roles) are server-defined Python
+constants in `airi/workspaces.py`, not new tables — same pattern as
+`TECH_STACK_CATEGORIES` — served unauthenticated via `GET
+/projects/coe-catalog` so the frontend never hardcodes them.
+
+### Risk tiering: worst-factor-wins
+
+A new `coe_initiative` project shows nothing but a 4-question risk
+quiz (`RISK_FACTORS` in `airi/workspaces.py`: Data, Autonomy,
+Exposure, Reversibility) until it's answered — answering it
+immediately unlocks everything else. `compute_risk_tier` takes the
+**max** score across the 4 answers, not an average: one severely-
+scored factor is enough to make the whole initiative High, the same
+way a single failed safety check outweighs three passing ones. That
+also makes the tier self-explaining — the stored `risk_explanation`
+always names the one factor that caused it (e.g. *"High, because of
+autonomy: acts on its own (sends, changes, spends)."*), so a tier is
+never a bare label. The quiz can be retaken any time; each answer
+overwrites the last (full-replace, like every other settings field in
+this codebase) and appends one `risk_set` ledger event.
+
+### Roles: 3, not a 7-column RACI
+
+`ACCOUNTABLE_ROLES` — Business Owner, Technical Owner, Governance
+Owner — each accountable for a different question (does this exist /
+does it work / does it meet CoE standards). `resolve_coe_roles`
+defaults every unassigned role to the workspace admin, so a solo
+workspace needs no role setup at all; an admin can reassign any role
+to a specific member from the Governance tab, full-replace like the
+risk answers.
+
+### The 6 gates and 3 enforcement levels
+
+`COE_GATES` — Frame, Design, Verify, Release, Run, Evolve-or-retire —
+each with a guide question and one accountable role. A gate's status
+(`GATE_STATUSES`: not started / in progress / cleared / flagged) is
+independent of the others; there's no forced ordering. What *does*
+depend on the risk tier is how much a gate's status matters —
+`ENFORCEMENT_LOOKUP[tier][gate_key]` gives one of three levels:
+
+- **advisory** — every gate at Low tier, and most gates at Standard.
+  Nothing blocks; Guide/Ledger still run.
+- **required_justification** — flagging (not clearing) requires a
+  non-empty note (`validate_gate_update` enforces this at every tier,
+  every level — it's the one Ledger field that's never optional).
+- **mandatory** — Design/Verify/Release at High tier. Clearing one of
+  these requires more than a note: the caller's `user_id` must match
+  whoever `resolve_coe_roles` names for that gate's `accountable_role`,
+  or the API 403s with a message naming which role can clear it
+  ("Only the Technical Owner can clear this gate — reassign the role
+  in the Governance tab if that's changed."). This is the one place
+  identity is actually checked — every other gate action (opening,
+  changing status, flagging, and clearing at lower enforcement levels)
+  stays open to any active workspace member.
+
+### Ledger: append-only, one row per write regardless of outcome
+
+`coe_control_events` records every risk-answer submission and every
+gate status change — including "I looked at this and left it
+unchanged," so nothing is silently lost. `GET
+/projects/{id}/coe-ledger` returns it newest-first; the frontend
+renders it as a collapsed "History" section, reusing the
+`.history-entry` pattern already used elsewhere in this file.
+
+### API reference (Phase 6)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /projects/coe-catalog` | Unauthenticated. Returns `RISK_FACTORS`, `COE_GATES`, `ACCOUNTABLE_ROLES`, `ENFORCEMENT_LOOKUP` so the frontend never hardcodes them. |
+| `PUT /projects/{id}/coe-risk` | Body: one answer per `RISK_FACTORS` key. Computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
+| `PUT /projects/{id}/coe-roles` | Admin-only. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
+| `PUT /projects/{id}/coe-phases/{gate_key}` | Body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
+| `GET /projects/{id}/coe-ledger` | All `coe_control_events` for the project, newest-first. |
 
 ## What's next
 

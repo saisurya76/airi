@@ -217,12 +217,12 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
 # 18 checklist steps) — designed to need almost no setup for a low-risk
 # initiative and to get genuinely hard to bypass for a high-risk one.
 #
-# Deliberately NOT identity-enforced yet (a mandatory gate doesn't check
-# that the caller marking it "cleared" actually holds the accountable
-# role) — that's a real next step, scoped out here so the core flow
-# (risk form -> 6 gates -> ledger) ships and gets used first. Every
-# write still goes through the ledger, so nothing is silently lost
-# while that's true.
+# Identity enforcement: clearing a Mandatory gate is restricted to
+# whoever resolve_coe_roles() names for that gate's accountable_role
+# (api.py's set_project_coe_gate checks this, since it's the one place
+# that knows the caller's user_id) — Standard/Advisory gates, and every
+# non-"cleared" status, stay open to any active member. Every write
+# still goes through the ledger regardless, so nothing is silently lost.
 
 RISK_FACTORS = {
     "data": {
