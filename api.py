@@ -1131,17 +1131,37 @@ def set_project_coe_roles(project_id: int, body: CoeRolesBody, authorization: Op
 
 @app.put("/projects/{project_id}/coe-phases/{gate_key}")
 def set_project_coe_gate(project_id: int, gate_key: str, body: CoeGateBody, authorization: Optional[str] = Header(default=None)):
-    """Any active member. Merges this one gate's new status/note into the
-    project's existing coe_phase_state (a full-replace field — see
-    db.set_project_gate_state) and appends one ledger row regardless of
-    whether anything actually changed, so "I looked at this and left it
-    as-is" is still on the record."""
+    """Any active member can open a gate, change its status, or flag it —
+    but *clearing* a gate at a Mandatory enforcement level is restricted
+    to whoever holds that gate's accountable role (resolved via
+    ws.resolve_coe_roles — the workspace admin by default). Standard/
+    Advisory gates, and every non-"cleared" status, stay open to any
+    member — only the one thing a Mandatory gate is meant to guarantee
+    (someone specific actually signed off) is locked down. Merges this
+    one gate's new status/note into the project's existing
+    coe_phase_state (a full-replace field — see db.set_project_gate_state)
+    and appends one ledger row regardless of whether anything actually
+    changed, so "I looked at this and left it as-is" is still on the
+    record."""
     user_id = _require_user_id(authorization)
-    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    project_row, workspace, _role = _get_accessible_project(project_id, user_id)
     try:
         gate_key, status, note = ws.validate_gate_update(gate_key, body.status, body.note)
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    tier = project_row.get("risk_tier") or "low"
+    if status == "cleared" and ws.enforcement_level(tier, gate_key) == "mandatory":
+        gate = ws.COE_GATES_BY_KEY[gate_key]
+        resolved_roles = ws.resolve_coe_roles(project_row.get("coe_roles") or {}, workspace["owner_user_id"])
+        accountable_user_id = resolved_roles[gate["accountable_role"]]
+        if user_id != accountable_user_id:
+            role_label = ws.ACCOUNTABLE_ROLES[gate["accountable_role"]]["label"]
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only the {role_label} can clear this gate — reassign the role in the Governance tab if that's changed.",
+            )
+
     phase_state = dict(project_row.get("coe_phase_state") or {})
     previous_status = (phase_state.get(gate_key) or {}).get("status", "")
     phase_state[gate_key] = {"status": status, "note": note, "updated_at": datetime.now(timezone.utc).isoformat()}
