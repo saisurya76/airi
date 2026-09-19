@@ -336,10 +336,20 @@ analyze, Traffic projection, Load-test report — see `airi/demo_seed.py`
 for why **Exact mode is deliberately never seeded**: it's the one tool
 whose entire value is a real, provider-verified count, and faking one
 would put a number on screen that looks verified but isn't), notes, and
-CoE governance walked through at two risk tiers (Standard and High,
-including one Mandatory gate left flagged rather than cleared, so the
-identity-enforcement restriction on clearing a gate is visible without
-extra setup).
+CoE governance turned ON for every one of the 5 projects, all 6 gates
+touched on each, spanning all 3 risk tiers: support_copilot (Standard)
+is a healthy, mostly-cleared lifecycle; fraud_triage (High) is
+genuinely blocked — Verify stays flagged rather than cleared, so the
+Mandatory-gate identity-enforcement restriction (only the resolved
+accountable role can clear Design/Verify/Release) is visible without
+extra setup; analytics_dashboard/license_request (Low) are fully
+cleared straight through, showing how lightweight governance is once
+nothing's actually risky; sdlc_request (Standard) is left mid-flow, a
+pilot still in progress. The two governed-with-explicit-roles projects
+(support_copilot, fraud_triage) also contrast with the other three,
+which leave every role unassigned on purpose — demonstrating that a
+solo/small workspace needs no role setup at all, since an unassigned
+role just defaults to the workspace admin.
 
 - **Seed demo data** — `POST /admin/demo/seed`. Idempotent in spirit:
   if the demo owner already owns a workspace, it's reused rather than

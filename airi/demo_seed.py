@@ -6,12 +6,25 @@ seed_demo_data() builds one realistic workspace end to end: five
 projects across every project type, saved runs from three of AIRI's
 four tools (Standard analyze, Traffic projection, Load-test report —
 see the module docstring's note on why Exact mode is deliberately left
-out), notes, and a full CoE governance example at both a Standard and a
-High risk tier — the High one walks through a Mandatory gate, including
-the one it's still too early to clear, so that enforcement behavior is
-visible without having to hand-build it. Everything a click through
-frontend/workspaces.html would show for a workspace that's actually
-been used for a while.
+out), notes, and CoE governance turned ON for every one of the 5
+projects, all 6 gates touched on each, spanning all 3 risk tiers and
+both ways roles can be set up (explicit assignment vs. left to default
+to the workspace admin):
+
+- support_copilot (Standard) — a healthy lifecycle, mostly cleared.
+- fraud_triage (High) — genuinely blocked: Verify stays flagged, so the
+  Mandatory-gate identity-enforcement restriction (only the resolved
+  accountable role can clear Design/Verify/Release) has something real
+  to bump into live, rather than being demonstrated by explanation.
+- analytics_dashboard, license_request (Low) — fully cleared, showing
+  how lightweight governance is once nothing's actually risky, and that
+  it applies just as sensibly to a plain vendor request as to shipping
+  an AI feature.
+- sdlc_request (Standard) — deliberately left mid-flow (a pilot still
+  in progress), rather than resolved either way.
+
+Everything a click through frontend/workspaces.html would show for a
+workspace that's actually been used for a while.
 
 Exact mode is deliberately NOT seeded here, unlike the other three
 tools: its whole point is a real, provider-verified count, and every
@@ -115,14 +128,19 @@ def _seed_coe(project_id: int, owner_user_id: int, member_user_id: int, risk_ans
 
     gate_plan: {gate_key: {"status": ..., "note": ...}} for every gate
     that should move off "not_started" — gates left out stay at their
-    default. roles: {role_key: user_id}."""
+    default. roles: {role_key: user_id}, or an empty dict to leave every
+    role unassigned on purpose — `resolve_coe_roles` defaults each one to
+    the workspace admin, so this demonstrates the other real, supported
+    setup: a solo/small workspace that never visits the Roles section at
+    all, with nothing broken or half-configured about it."""
     tier, explanation = ws.compute_risk_tier(risk_answers)
     db.set_project_risk(project_id, tier, risk_answers, explanation)
     db.create_coe_event(project_id, None, "risk_set", owner_user_id, from_value="", to_value=tier, note="")
 
-    db.set_project_roles(project_id, roles)
-    for role_key, user_id in roles.items():
-        db.create_coe_event(project_id, None, "role_assigned", owner_user_id, from_value="", to_value=str(user_id), note=role_key)
+    if roles:
+        db.set_project_roles(project_id, roles)
+        for role_key, user_id in roles.items():
+            db.create_coe_event(project_id, None, "role_assigned", owner_user_id, from_value="", to_value=str(user_id), note=role_key)
 
     phase_state: Dict[str, Any] = {}
     for gate_key, plan in gate_plan.items():
@@ -248,26 +266,82 @@ def seed_demo_data(secret: str) -> Dict[str, Any]:
         "Internal analytics dashboard rebuild — natural-language query box on top of the existing warehouse.",
         {"frontend": "React", "backend": "Node", "database": "Snowflake", "ai_services": "OpenAI",
          "ai_model": "GPT-4o", "hosting": "Vercel"},
-        "api_request", coe_governance_enabled=False,
+        "api_request", coe_governance_enabled=True,
     )
     project_ids["analytics_dashboard"] = p3["id"]
     _seed_tool_runs(p3["id"])
-    db.create_note(p3["id"], "CoE governance intentionally left off — internal-only tool, no autonomy, low stakes either way.")
+    _seed_coe(
+        p3["id"], owner_id, member_id,
+        risk_answers={"data": "public_internal", "autonomy": "advisory", "exposure": "internal", "reversibility": "easily_reversible"},
+        # Low tier — every gate is advisory (see ENFORCEMENT_LOOKUP), so
+        # nothing here blocks; the point of this project is to show how
+        # lightweight governance is for something genuinely low-stakes.
+        # roles={} (below) also demonstrates the OTHER supported setup
+        # from support_copilot/fraud_triage's explicit assignment: no
+        # role setup at all, defaulting to the workspace admin.
+        gate_plan={
+            "frame": {"status": "cleared", "note": "Approved — clear internal need, no autonomy or exposure risk."},
+            "design": {"status": "cleared", "note": "Standard internal architecture, no new data classification."},
+            "verify": {"status": "cleared", "note": "Query accuracy checked against existing reports — results match."},
+            "release": {"status": "cleared", "note": "Rolled out to the analytics team."},
+            "run": {"status": "in_progress", "note": "Used daily by the analytics team, no issues reported so far."},
+            "evolve_retire": {"status": "not_started", "note": "Nothing to revisit yet."},
+        },
+        roles={},
+    )
+    db.create_note(p3["id"], "CoE governance is ON here at Low risk tier — every gate is advisory only, so it's a light touch: internal-only tool, no autonomy, low stakes either way.")
 
     p4 = db.create_project(
         workspace_id, "Vendor License Request — Copilot Seats",
         "Requesting 12 additional GitHub Copilot seats for the platform team for Q1.",
-        {}, "license_request", coe_governance_enabled=False,
+        {}, "license_request", coe_governance_enabled=True,
     )
     project_ids["license_request"] = p4["id"]
+    _seed_coe(
+        p4["id"], owner_id, member_id,
+        risk_answers={"data": "public_internal", "autonomy": "advisory", "exposure": "internal", "reversibility": "easily_reversible"},
+        # Same Low tier as analytics_dashboard, but note that CoE applies
+        # here too even though this isn't an AI system being built at all
+        # — Frame/Verify/etc. still make sense as "is this a real need /
+        # did we actually get what we asked for" checkpoints for a plain
+        # vendor request, not just for building software.
+        gate_plan={
+            "frame": {"status": "cleared", "note": "Manager approved the business case for 12 seats."},
+            "design": {"status": "cleared", "note": "No build here — just a vendor purchase; marked reviewed."},
+            "verify": {"status": "cleared", "note": "Seats provisioned and confirmed working for all 12 users."},
+            "release": {"status": "cleared", "note": "Live — the team has full Copilot access."},
+            "run": {"status": "cleared", "note": "No issues since rollout; usage tracked by procurement."},
+            "evolve_retire": {"status": "not_started", "note": "Revisit at contract renewal."},
+        },
+        roles={},
+    )
     db.create_note(p4["id"], "Manager approval received — routing to procurement for the PO.")
 
     p5 = db.create_project(
         workspace_id, "Dev Tool Seat Request — Cursor",
         "Trial request for 5 Cursor seats on the backend team, 60-day pilot before a full rollout decision.",
-        {}, "sdlc_request", coe_governance_enabled=False,
+        {}, "sdlc_request", coe_governance_enabled=True,
     )
     project_ids["sdlc_request"] = p5["id"]
+    _seed_coe(
+        p5["id"], owner_id, member_id,
+        risk_answers={"data": "public_internal", "autonomy": "human_in_loop", "exposure": "internal", "reversibility": "easily_reversible"},
+        # Standard tier this time (autonomy scores 1 — a human decides
+        # whether to roll the pilot out further) — and deliberately left
+        # mid-flow rather than resolved, the 5th project's role in the
+        # spread: support_copilot is mostly done, fraud_triage is
+        # blocked, analytics_dashboard/license_request are fully clear,
+        # this one is still actively in progress.
+        gate_plan={
+            "frame": {"status": "cleared", "note": "Pilot approved for the backend team, 60-day trial."},
+            "design": {"status": "cleared", "note": "Standard IDE/tooling install, no new data flows."},
+            "verify": {"status": "in_progress", "note": "Pilot underway — collecting adoption and productivity feedback from the 5 pilot users."},
+            "release": {"status": "not_started", "note": "Waiting on pilot results before deciding on a full rollout."},
+            "run": {"status": "not_started", "note": "Not applicable until Release."},
+            "evolve_retire": {"status": "not_started", "note": "Too early — revisit after the pilot retro."},
+        },
+        roles={},
+    )
     db.create_note(p5["id"], "Pilot starts next sprint — revisit adoption numbers in the retro after 60 days.")
 
     return {

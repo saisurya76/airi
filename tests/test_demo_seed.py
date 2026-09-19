@@ -87,36 +87,41 @@ def test_seed_demo_data_seeds_coe_governance_with_a_full_ledger_trail():
     with patch("airi.demo_seed.db") as mock_db_module:
         _wire_mock_db(mock_db_module)
         seed_demo_data("test-secret")
-        # Only the two CoE-governed projects (support_copilot, fraud_triage)
-        # get a risk tier / roles / gate ledger — analytics_dashboard and
-        # the two non-api_request projects deliberately don't.
-        assert mock_db_module.set_project_risk.call_count == 2
+        # Every one of the 5 demo projects now has CoE governance on —
+        # see demo_seed.py's module docstring for the spread across risk
+        # tiers this is meant to show.
+        assert mock_db_module.set_project_risk.call_count == 5
+        assert mock_db_module.set_project_gate_state.call_count == 5
+        # Only support_copilot and fraud_triage explicitly assign roles
+        # (business_owner/technical_owner/governance_owner each); the
+        # other 3 pass roles={} on purpose, to demonstrate the other real
+        # setup — every role defaulting to the workspace admin, no setup
+        # needed — so set_project_roles is only ever called for those 2.
         assert mock_db_module.set_project_roles.call_count == 2
-        assert mock_db_module.set_project_gate_state.call_count == 2
         event_types = [c.args[2] for c in mock_db_module.create_coe_event.call_args_list]
-        assert event_types.count("risk_set") == 2
-        assert event_types.count("role_assigned") == 6  # 3 roles x 2 governed projects
-        # All 6 gates touched on both governed projects now (see
-        # demo_seed.py's gate_plan comments) — 6 + 6, not just the couple
+        assert event_types.count("risk_set") == 5
+        assert event_types.count("role_assigned") == 6  # 3 roles x 2 projects with explicit roles
+        # All 6 gates touched on every governed project now (see
+        # demo_seed.py's gate_plan comments) — 6 x 5, not just the couple
         # that used to be left at the implicit default.
-        assert event_types.count("gate_status_changed") == 12
+        assert event_types.count("gate_status_changed") == 30
         print("OK: seed_demo_data_seeds_coe_governance_with_a_full_ledger_trail")
 
 
-def test_seed_demo_data_touches_all_six_gates_on_both_governed_projects():
-    """Regression guard for 'fill up CoE items fully': both CoE-governed
-    demo projects must have every one of the 6 real COE_GATE_KEYS
-    represented in their phase_state, not just the couple that used to
-    be left at the implicit not_started default — otherwise a demo
-    walkthrough shows a mostly-empty Governance tab. Also pins that
-    Fraud Triage's Verify gate stays 'flagged' (never accidentally
-    'cleared'), since that's the one load-bearing piece of the demo
-    that makes the Mandatory-gate identity-enforcement restriction
-    visible without extra setup — see demo_seed.py's gate_plan comment."""
+def test_seed_demo_data_touches_all_six_gates_on_every_governed_project():
+    """Regression guard for 'fill up all gates in demos': every one of
+    the 5 demo projects must have every one of the 6 real COE_GATE_KEYS
+    represented in its phase_state, not just support_copilot/fraud_triage
+    — otherwise 3 of the 5 projects show a mostly-empty Governance tab.
+    Also pins that Fraud Triage's Verify gate stays 'flagged' (never
+    accidentally 'cleared'), since that's the one load-bearing piece of
+    the demo that makes the Mandatory-gate identity-enforcement
+    restriction visible without extra setup — see demo_seed.py's
+    gate_plan comment."""
     with patch("airi.demo_seed.db") as mock_db_module:
         _wire_mock_db(mock_db_module)
         seed_demo_data("test-secret")
-        assert mock_db_module.set_project_gate_state.call_count == 2
+        assert mock_db_module.set_project_gate_state.call_count == 5
         for call in mock_db_module.set_project_gate_state.call_args_list:
             phase_state = call.args[1]
             assert set(phase_state.keys()) == set(COE_GATE_KEYS), (
@@ -124,7 +129,7 @@ def test_seed_demo_data_touches_all_six_gates_on_both_governed_projects():
             )
         fraud_triage_phase_state = mock_db_module.set_project_gate_state.call_args_list[1].args[1]
         assert fraud_triage_phase_state["verify"]["status"] == "flagged"
-        print("OK: seed_demo_data_touches_all_six_gates_on_both_governed_projects")
+        print("OK: seed_demo_data_touches_all_six_gates_on_every_governed_project")
 
 
 def test_seed_demo_data_leaves_a_note_on_every_project():
@@ -141,6 +146,6 @@ if __name__ == "__main__":
     test_seed_demo_data_creates_five_projects_of_every_type()
     test_seed_demo_data_seeds_tool_runs_for_api_request_projects_only()
     test_seed_demo_data_seeds_coe_governance_with_a_full_ledger_trail()
-    test_seed_demo_data_touches_all_six_gates_on_both_governed_projects()
+    test_seed_demo_data_touches_all_six_gates_on_every_governed_project()
     test_seed_demo_data_leaves_a_note_on_every_project()
     print("\nAll demo_seed sanity checks passed.")
