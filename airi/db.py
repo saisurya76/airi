@@ -198,6 +198,46 @@ def get_user_id_by_email(email: str) -> Optional[int]:
         return row["id"] if row else None
 
 
+def get_user_by_email(email: str) -> Optional[dict]:
+    """Like get_user_id_by_email, but also returns `disabled`/`is_demo`
+    (sql/013) — used by _require_session_email_and_user_id so a disabled
+    account is rejected centrally, for every authenticated endpoint, the
+    moment it's disabled (not just on its next fresh login)."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT id, disabled, is_demo FROM users WHERE lower(email) = lower(%s)",
+            (email,),
+        )
+        return cur.fetchone()
+
+
+def set_user_disabled(user_id: int, disabled: bool) -> Optional[dict]:
+    """Generic per-user kill switch (sql/013) — used today only by the
+    demo-disable admin action (see set_demo_users_disabled below), but
+    written to take any user_id so it's available for a real, abusive
+    account too without a schema change."""
+    with _cursor() as cur:
+        cur.execute(
+            "UPDATE users SET disabled = %s WHERE id = %s RETURNING id, email, disabled, is_demo",
+            (disabled, user_id),
+        )
+        return cur.fetchone()
+
+
+def delete_user(user_id: int) -> bool:
+    """One statement is enough to remove a user AND everything they own —
+    user_profile, every workspace they own (which itself cascades to
+    that workspace's projects, tool runs, notes, and CoE ledger — see
+    sql/003/004/005/008's ON DELETE CASCADE chain), and every
+    workspace_members row naming them (as the member OR via their own
+    cascaded workspaces). The schema was built with this cascade chain
+    from the start specifically so "delete this account and all its
+    data" never needs its own bespoke multi-table teardown logic."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        return cur.rowcount > 0
+
+
 def get_terms_accepted_at(user_id: int):
     """None means this user hasn't accepted the current Terms & Conditions
     yet (see sql/007_terms_acceptance.sql) — the frontend gates entry into
@@ -756,5 +796,155 @@ def list_coe_events(project_id: int) -> List[dict]:
         cur.execute(
             f"SELECT {_COE_EVENT_FIELDS} FROM coe_control_events WHERE project_id = %s ORDER BY created_at DESC",
             (project_id,),
+        )
+        return cur.fetchall()
+
+
+# ---------- admin: users list, usage rollup, demo/test data ----------
+#
+# Everything below is reached only from api.py's /admin/* endpoints
+# (password-gated via _require_admin — a different, site-wide gate from
+# the per-account session token every function above this point checks
+# against). See sql/013_admin_demo_users.sql and airi/demo_seed.py.
+
+def upsert_demo_user(email: str) -> int:
+    """Like upsert_user_login, but for an account created by the admin
+    seed action, never by a real login: marks it is_demo = true and
+    pre-accepts the current Terms & Conditions (sql/007), so a minted
+    demo session (see POST /admin/demo/login in api.py — there's no OTP
+    step to accept them during) never gets stuck behind that gate. Safe
+    to call again on an already-seeded email — re-affirms is_demo rather
+    than erroring, and never touches terms_accepted_at a second time
+    (ON CONFLICT would otherwise reset the timestamp on every re-seed)."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO users (email, last_login_at, is_demo, terms_accepted_at)
+            VALUES (lower(%s), now(), true, now())
+            ON CONFLICT (email) DO UPDATE SET is_demo = true
+            RETURNING id
+            """,
+            (email,),
+        )
+        return cur.fetchone()["id"]
+
+
+def get_demo_owner() -> Optional[dict]:
+    """The one demo account that owns the seeded workspace (see
+    airi/demo_seed.py's DEMO_OWNER_EMAIL) — None until the admin has
+    seeded at least once. Deliberately keyed by is_demo, not by email:
+    api.py never hardcodes the demo email outside demo_seed.py."""
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT id, email, disabled FROM users WHERE is_demo ORDER BY id ASC LIMIT 1"
+        )
+        return cur.fetchone()
+
+
+def list_demo_users() -> List[dict]:
+    with _cursor() as cur:
+        cur.execute("SELECT id, email, disabled FROM users WHERE is_demo ORDER BY id ASC")
+        return cur.fetchall()
+
+
+def set_demo_users_disabled(disabled: bool) -> int:
+    """Flips the account-level kill switch (sql/013) for every demo user
+    at once — this alone is enough to block the demo OWNER's login (it's
+    checked centrally in api.py's _require_session_email_and_user_id).
+    It does NOT by itself block the demo MEMBER's access-code login,
+    which checks workspace_members.status, not this column — see
+    set_demo_memberships_status, always called alongside this one."""
+    with _cursor() as cur:
+        cur.execute("UPDATE users SET disabled = %s WHERE is_demo", (disabled,))
+        return cur.rowcount
+
+
+def set_demo_memberships_status(status: str) -> int:
+    """The other half of disabling/re-enabling the demo identity: flips
+    every workspace_members row that's part of the demo picture, whether
+    that's the demo member's own membership rows (matched by user_id) or
+    a membership inside a workspace a demo user owns (matched by
+    workspace_id) — covering a demo workspace's real members too, not
+    just ones who are themselves flagged is_demo. status is 'disabled'
+    or 'active', same convention as set_workspace_member_status."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            UPDATE workspace_members
+            SET status = %s
+            WHERE user_id IN (SELECT id FROM users WHERE is_demo)
+               OR workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE is_demo))
+            """,
+            (status,),
+        )
+        return cur.rowcount
+
+
+def delete_demo_workspaces() -> int:
+    """Wipes every workspace a demo user owns — and, via the same
+    ON DELETE CASCADE chain delete_user relies on, everything under
+    them (projects, tool runs, notes, CoE ledger, memberships) — while
+    leaving the demo users' own account rows in place, so a demo login
+    minted earlier keeps working and "seed demo data" can rebuild a
+    fresh baseline without first re-creating the accounts."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE is_demo)")
+        return cur.rowcount
+
+
+def delete_demo_users() -> int:
+    """The full teardown: deletes every is_demo user row outright, which
+    cascades away their workspaces (and everything under them, per
+    delete_demo_workspaces' docstring) plus the accounts themselves —
+    after this, even the demo login capability is gone until the admin
+    seeds again from scratch."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM users WHERE is_demo")
+        return cur.rowcount
+
+
+def list_users_for_admin() -> List[dict]:
+    """Every account on this deployment, newest first, with a cheap
+    per-user workspace/project count via correlated subqueries (fine at
+    this scale — an admin-only, human-viewed list, not a hot path).
+    Token/cost usage isn't included here: that needs summing JSONB
+    `result` rows through airi.consolidated_report.aggregate_totals
+    (different tools use different field names for cost/tokens), which
+    only makes sense done once in Python — see
+    list_tool_runs_for_usage_rollup, merged in by api.py's
+    GET /admin/users handler."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                u.id, u.email, u.created_at, u.last_login_at, u.is_demo, u.disabled,
+                (SELECT count(*) FROM workspaces w WHERE w.owner_user_id = u.id) AS workspace_count,
+                (SELECT count(*) FROM projects p
+                   JOIN workspaces w2 ON w2.id = p.workspace_id
+                  WHERE w2.owner_user_id = u.id) AS project_count
+            FROM users u
+            ORDER BY u.created_at DESC
+            """
+        )
+        return cur.fetchall()
+
+
+def list_tool_runs_for_usage_rollup() -> List[dict]:
+    """One row per saved tool run across EVERY user's projects — just
+    enough (owning user_id, tool, result) to feed
+    airi.consolidated_report.aggregate_totals per user in Python. This
+    guarantees a user's total on the admin Users panel is computed with
+    the exact same logic as their own Dashboard/Actions tab, rather than
+    a second, easy-to-drift SQL reimplementation of "what does a tool
+    run's result count as" (different tools store cost/tokens under
+    different JSON keys — see consolidated_report.run_stats)."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT w.owner_user_id AS user_id, tr.tool, tr.result
+            FROM project_tool_runs tr
+            JOIN projects p ON p.id = tr.project_id
+            JOIN workspaces w ON w.id = p.workspace_id
+            """
         )
         return cur.fetchall()

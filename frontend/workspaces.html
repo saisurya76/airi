@@ -643,6 +643,23 @@
 
   let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
   let authEmail = localStorage.getItem(AUTH_EMAIL_KEY) || null;
+
+  // One-click demo sign-in — shared behavior with app.html's version of
+  // this same function; see its comment there for the full rationale.
+  (function bootstrapDemoSessionFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const demoToken = params.get("demo_token");
+    if (!demoToken) return;
+    authToken = demoToken;
+    authEmail = params.get("demo_email") || null;
+    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    if (authEmail) localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+    params.delete("demo_token");
+    params.delete("demo_email");
+    const newQuery = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (newQuery ? `?${newQuery}` : "") + window.location.hash);
+  })();
+
   let hasAppKey = false;
   let appKeyRevealed = false;
   let workspaces = [];

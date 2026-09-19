@@ -92,6 +92,87 @@ def test_ai_guide_rate_limit_is_its_own_separate_budget():
     print("OK: ai_guide_rate_limit_is_its_own_separate_budget")
 
 
+def test_admin_demo_and_users_routes_are_registered_and_password_gated():
+    """Regression guard for the admin demo-data feature: every new
+    /admin/* route must actually be wired into the route table (a typo
+    in the decorator path is invisible to a plain grep), and every one
+    must refuse an unauthenticated caller before touching the database —
+    same _require_admin gate as the rest of /admin/*, checked before any
+    DB access, so this must never reach a DatabaseNotConfigured 503
+    ahead of the auth check."""
+    routes_by_path = {getattr(r, "path", None): r for r in api.app.routes}
+    expected = [
+        ("GET", "/admin/users"),
+        ("POST", "/admin/demo/seed"),
+        ("POST", "/admin/demo/login"),
+        ("POST", "/admin/demo/disable"),
+        ("POST", "/admin/demo/enable"),
+        ("DELETE", "/admin/demo/data"),
+        ("DELETE", "/admin/demo/user"),
+    ]
+    for method, path in expected:
+        assert path in routes_by_path, f"{method} {path} is not registered"
+        assert method in routes_by_path[path].methods, f"{method} {path} is registered but not for {method}"
+
+    # 401 (bad/missing token) or 503 (this test env has no AUTH_SECRET
+    # configured at all) — either way, never a 200 and never a database
+    # error, proving _require_admin runs and rejects before any DB call.
+    resp = client.get("/admin/users")
+    assert resp.status_code in (401, 503), f"expected 401 or 503 with no admin token, got {resp.status_code}: {resp.text}"
+    resp = client.post("/admin/demo/seed")
+    assert resp.status_code in (401, 503), f"expected 401 or 503 with no admin token, got {resp.status_code}: {resp.text}"
+    print("OK: admin_demo_and_users_routes_are_registered_and_password_gated")
+
+
+def test_demo_disable_flips_both_demo_login_paths_not_just_one():
+    """Regression guard: disabling the demo identity has to block BOTH
+    the owner's OTP-free login (users.disabled) and the member's
+    access-code login (workspace_members.status) — see
+    db.set_demo_users_disabled / db.set_demo_memberships_status. A fix
+    that only touched one of the two would leave one demo login path
+    reachable after "disable" — this pins that api.py's disable/enable
+    endpoints always call both."""
+    import inspect
+    disable_src = inspect.getsource(api.admin_disable_demo)
+    enable_src = inspect.getsource(api.admin_enable_demo)
+    for src in (disable_src, enable_src):
+        assert "set_demo_users_disabled" in src
+        assert "set_demo_memberships_status" in src
+    print("OK: demo_disable_flips_both_demo_login_paths_not_just_one")
+
+
+def test_disabled_user_is_rejected_even_with_a_valid_session_token():
+    """Regression guard for the central disabled-account check added to
+    _require_session_email_and_user_id (sql/013's users.disabled): a
+    technically-valid, unexpired session JWT must still be refused with
+    403 once the account is disabled — proving the check happens on
+    every request against the current DB row, not just at token-issue
+    time. GET /workspaces is used here specifically because it routes
+    through _require_user_id -> _require_session_email_and_user_id (the
+    central helper) — unlike GET /auth/me, which resolves the user id a
+    different way and is a known, accepted gap (see api.py)."""
+    from unittest.mock import patch
+    from airi.auth import create_session_token
+
+    email = "disabled-user@example.com"
+    with patch.dict(os.environ, {"AUTH_SECRET": "test-secret-for-disabled-check"}):
+        token = create_session_token(email, "test-secret-for-disabled-check")
+        with patch("api.db") as mock_db_module:
+            mock_db_module.get_user_by_email.return_value = {"id": 42, "disabled": True, "is_demo": True}
+            resp = client.get("/workspaces", headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 403, f"expected 403 for a disabled account, got {resp.status_code}: {resp.text}"
+
+            # Sanity check on the other side: an otherwise-identical, non-disabled
+            # user must NOT be rejected by this same check (proves the 403 above
+            # is actually gated on `disabled`, not on the mock itself, the token,
+            # or some other unrelated failure).
+            mock_db_module.get_user_by_email.return_value = {"id": 42, "disabled": False, "is_demo": True}
+            mock_db_module.list_workspaces.return_value = []
+            resp = client.get("/workspaces", headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 200, f"expected 200 for an enabled account, got {resp.status_code}: {resp.text}"
+    print("OK: disabled_user_is_rejected_even_with_a_valid_session_token")
+
+
 def test_coe_toggle_rate_limits_are_more_generous_than_login():
     """Regression guard for the 429 an admin hit doing completely normal
     interactive use of the CoE toggle (flip a project on, cancel, retry,
@@ -114,5 +195,8 @@ if __name__ == "__main__":
     test_project_id_route_still_reports_not_found_for_a_real_int_path()
     test_ai_guide_route_is_registered_and_shaped_correctly()
     test_ai_guide_rate_limit_is_its_own_separate_budget()
+    test_admin_demo_and_users_routes_are_registered_and_password_gated()
+    test_demo_disable_flips_both_demo_login_paths_not_just_one()
+    test_disabled_user_is_rejected_even_with_a_valid_session_token()
     test_coe_toggle_rate_limits_are_more_generous_than_login()
     print("\nAll api route sanity checks passed.")

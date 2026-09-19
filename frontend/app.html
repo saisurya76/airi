@@ -880,6 +880,27 @@
   let testMode = null;
   let byokPanelOpen = false;
 
+  // One-click demo sign-in (admin.html's "Open demo session" button):
+  // reads ?demo_token=<jwt>&demo_email=<email> from the URL, stores them
+  // under the same keys a normal OTP sign-in uses, then strips the query
+  // string so a refresh, bookmark, or shared link doesn't keep re-sending
+  // the token. The token still has to pass GET /auth/me like any other
+  // stored token (see checkExistingSession below) — this only seeds
+  // localStorage, it doesn't skip validation.
+  (function bootstrapDemoSessionFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const demoToken = params.get("demo_token");
+    if (!demoToken) return;
+    authToken = demoToken;
+    authEmail = params.get("demo_email") || null;
+    localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    if (authEmail) localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+    params.delete("demo_token");
+    params.delete("demo_email");
+    const newQuery = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (newQuery ? `?${newQuery}` : "") + window.location.hash);
+  })();
+
   const flavorStandardBtn = document.getElementById("flavorStandardBtn");
   const flavorExactBtn = document.getElementById("flavorExactBtn");
   const authStatus = document.getElementById("authStatus");

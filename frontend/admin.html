@@ -175,6 +175,29 @@
   }
   .site-footer a { color: var(--muted); text-decoration: underline; margin: 0 6px; }
   .site-footer a:hover { color: var(--accent); }
+
+  .table-wrap { overflow-x: auto; margin-top: 14px; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .data-table th, .data-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .data-table th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.02em; }
+  .data-table td { color: var(--text); }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 2px 8px; margin-right: 4px; }
+  .badge.demo { background: rgba(110,168,254,0.15); color: var(--accent); border: 1px solid rgba(110,168,254,0.35); }
+  .badge.disabled { background: rgba(242,85,90,0.15); color: var(--exceeded); border: 1px solid rgba(242,85,90,0.35); }
+  .empty-note { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+  .btn-row button { margin-top: 0; }
+  .code-box {
+    margin-top: 14px;
+    background: var(--inset);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+  }
+  .code-box .code-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; color: var(--safe); margin-top: 4px; letter-spacing: 0.02em; }
+  .spin-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
 </style>
 <script>
   // Site-wide theme (see admin.html "Appearance" panel, airi/theme.py):
@@ -485,6 +508,58 @@
       <div id="authorSavedMsg" class="saved-msg hidden">Saved.</div>
     </div>
 
+    <div id="demoPanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">Demo data</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">One seeded workspace — 5 projects covering every project type, saved tool runs, notes, and CoE governance at two risk tiers — for browsing the app end to end or building on top of as a sandbox. Seeded rows are flagged internally so these actions never touch a real user's account.</p>
+
+      <div class="btn-row">
+        <button type="button" id="seedDemoBtn">Seed demo data</button>
+        <button type="button" id="openDemoBtn" class="secondary-btn" disabled>Open demo session</button>
+        <button type="button" id="disableDemoBtn" class="secondary-btn" disabled>Disable</button>
+        <button type="button" id="enableDemoBtn" class="secondary-btn hidden">Enable</button>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button type="button" id="wipeDemoDataBtn" class="secondary-btn" disabled>Delete demo data (keep accounts)</button>
+        <button type="button" id="deleteDemoUsersBtn" class="secondary-btn" disabled>Delete demo accounts entirely</button>
+      </div>
+
+      <div id="demoSummary" class="code-box hidden">
+        <div>Owner: <span id="demoOwnerEmail" style="color:var(--text); font-weight:600;"></span></div>
+        <div style="margin-top:6px;">Team member: <span id="demoMemberEmail" style="color:var(--text); font-weight:600;"></span></div>
+        <div id="demoMemberCodeRow" class="hidden" style="margin-top:6px;">
+          Access code: <span id="demoMemberCode" class="code-value"></span>
+          <div class="field-hint" style="margin-top:2px;">Shown once, right after seeding — the team member uses this on the sign-in screen's "I have an access code" option. Not stored anywhere retrievable after this.</div>
+        </div>
+      </div>
+      <div class="spin-note hidden" id="demoBusyNote">Working…</div>
+      <div id="demoError" class="error hidden"></div>
+      <div id="demoSavedMsg" class="saved-msg hidden"></div>
+    </div>
+
+    <div id="usersPanel" class="panel hidden">
+      <div style="font-size:14px; color:var(--text); font-weight:600;">Users</div>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">Everyone who has signed in, newest first, with how much of the app each has used overall — the same token/cost totals aggregate_totals computes for a user's own Dashboard, just rolled up across all of their workspaces.</p>
+      <div id="usersEmpty" class="empty-note hidden">No one has signed in yet.</div>
+      <div id="usersTableWrap" class="table-wrap hidden">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Joined</th>
+              <th>Last login</th>
+              <th>Workspaces</th>
+              <th>Projects</th>
+              <th>Runs</th>
+              <th>Tokens</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody"></tbody>
+        </table>
+      </div>
+      <div id="usersError" class="error hidden"></div>
+    </div>
+
     <div class="site-footer">
       <a href="privacy.html">Privacy</a>
       <a href="terms.html">Terms</a>
@@ -539,6 +614,34 @@
   let selectedTheme = "midnight";
   let lastSavedTheme = { theme: "midnight", auto_day_night: false, day_start: "06:00", night_start: "18:00" };
 
+  // ---------- Demo data + Users (see docs/ADMIN.md) ----------
+
+  const DEMO_OWNER_EMAIL = "demo-owner@airi-demo.local";
+  const DEMO_MEMBER_EMAIL = "demo-member@airi-demo.local";
+
+  const demoPanel = document.getElementById("demoPanel");
+  const seedDemoBtn = document.getElementById("seedDemoBtn");
+  const openDemoBtn = document.getElementById("openDemoBtn");
+  const disableDemoBtn = document.getElementById("disableDemoBtn");
+  const enableDemoBtn = document.getElementById("enableDemoBtn");
+  const wipeDemoDataBtn = document.getElementById("wipeDemoDataBtn");
+  const deleteDemoUsersBtn = document.getElementById("deleteDemoUsersBtn");
+  const demoSummary = document.getElementById("demoSummary");
+  const demoOwnerEmail = document.getElementById("demoOwnerEmail");
+  const demoMemberEmail = document.getElementById("demoMemberEmail");
+  const demoMemberCodeRow = document.getElementById("demoMemberCodeRow");
+  const demoMemberCode = document.getElementById("demoMemberCode");
+  const demoBusyNote = document.getElementById("demoBusyNote");
+  const demoError = document.getElementById("demoError");
+  const demoSavedMsg = document.getElementById("demoSavedMsg");
+
+  const usersPanel = document.getElementById("usersPanel");
+  const usersEmpty = document.getElementById("usersEmpty");
+  const usersTableWrap = document.getElementById("usersTableWrap");
+  const usersTableBody = document.getElementById("usersTableBody");
+  const usersError = document.getElementById("usersError");
+  let lastUsers = [];
+
   function showSignedOut() {
     loginPanel.classList.remove("hidden");
     dashboardPanel.classList.add("hidden");
@@ -546,6 +649,8 @@
     visibilityPanel.classList.add("hidden");
     appearancePanel.classList.add("hidden");
     authorPanel.classList.add("hidden");
+    demoPanel.classList.add("hidden");
+    usersPanel.classList.add("hidden");
     signOutBtn.classList.add("hidden");
   }
 
@@ -556,6 +661,8 @@
     visibilityPanel.classList.remove("hidden");
     appearancePanel.classList.remove("hidden");
     authorPanel.classList.remove("hidden");
+    demoPanel.classList.remove("hidden");
+    usersPanel.classList.remove("hidden");
     signOutBtn.classList.remove("hidden");
   }
 
@@ -613,7 +720,215 @@
     }
     loadAuthorProfile();
     loadThemeCatalog();
+    loadUsers();
   }
+
+  // ---------- Users list + usage ----------
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  function fmtAdminDate(iso) {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  function renderUsersTable(users) {
+    if (!users.length) {
+      usersEmpty.classList.remove("hidden");
+      usersTableWrap.classList.add("hidden");
+      return;
+    }
+    usersEmpty.classList.add("hidden");
+    usersTableWrap.classList.remove("hidden");
+    usersTableBody.innerHTML = users.map((u) => `
+      <tr>
+        <td>${escapeHtml(u.email)}${u.is_demo ? '<span class="badge demo">demo</span>' : ""}${u.disabled ? '<span class="badge disabled">disabled</span>' : ""}</td>
+        <td>${fmtAdminDate(u.created_at)}</td>
+        <td>${fmtAdminDate(u.last_login_at)}</td>
+        <td>${u.workspace_count}</td>
+        <td>${u.project_count}</td>
+        <td>${Number(u.total_runs || 0).toLocaleString()}</td>
+        <td>${Number(u.total_tokens || 0).toLocaleString()}</td>
+        <td>$${Number(u.total_cost || 0).toFixed(2)}</td>
+      </tr>
+    `).join("");
+  }
+
+  // The demo panel's on/off state is derived from this same users list
+  // (by the two fixed demo emails, see demo_seed.py) rather than tracked
+  // separately — there's no dedicated "is demo seeded" endpoint, and
+  // this way the two panels can never disagree about whether demo data
+  // exists right now.
+  function refreshDemoPanel(users) {
+    const ownerRow = users.find((u) => u.email === DEMO_OWNER_EMAIL);
+    const memberRow = users.find((u) => u.email === DEMO_MEMBER_EMAIL);
+    const seeded = !!ownerRow;
+
+    openDemoBtn.disabled = !seeded || !!(ownerRow && ownerRow.disabled);
+    wipeDemoDataBtn.disabled = !seeded;
+    deleteDemoUsersBtn.disabled = !seeded;
+
+    if (seeded && ownerRow.disabled) {
+      disableDemoBtn.classList.add("hidden");
+      enableDemoBtn.classList.remove("hidden");
+      enableDemoBtn.disabled = false;
+    } else {
+      disableDemoBtn.classList.remove("hidden");
+      disableDemoBtn.disabled = !seeded;
+      enableDemoBtn.classList.add("hidden");
+    }
+
+    if (seeded) {
+      demoOwnerEmail.textContent = ownerRow.email + (ownerRow.disabled ? " (disabled)" : "");
+      demoMemberEmail.textContent = memberRow ? memberRow.email : DEMO_MEMBER_EMAIL;
+      demoSummary.classList.remove("hidden");
+    } else {
+      demoSummary.classList.add("hidden");
+      demoMemberCodeRow.classList.add("hidden");
+    }
+  }
+
+  async function loadUsers() {
+    usersError.classList.add("hidden");
+    try {
+      const res = await fetch(`${API_BASE}/admin/users`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not load users.");
+      lastUsers = data;
+      renderUsersTable(data);
+      refreshDemoPanel(data);
+    } catch (e) {
+      usersError.textContent = e.message;
+      usersError.classList.remove("hidden");
+    }
+  }
+
+  // ---------- Demo data actions ----------
+
+  async function withDemoBusy(fn) {
+    demoError.classList.add("hidden");
+    demoSavedMsg.classList.add("hidden");
+    [seedDemoBtn, openDemoBtn, disableDemoBtn, enableDemoBtn, wipeDemoDataBtn, deleteDemoUsersBtn].forEach((b) => { b.disabled = true; });
+    demoBusyNote.classList.remove("hidden");
+    try {
+      await fn();
+    } catch (e) {
+      demoError.textContent = e.message;
+      demoError.classList.remove("hidden");
+    } finally {
+      demoBusyNote.classList.add("hidden");
+      await loadUsers(); // recomputes correct enabled/disabled state for every demo button
+    }
+  }
+
+  function showDemoSaved(message) {
+    demoSavedMsg.textContent = message;
+    demoSavedMsg.classList.remove("hidden");
+    setTimeout(() => demoSavedMsg.classList.add("hidden"), 4000);
+  }
+
+  seedDemoBtn.addEventListener("click", () => withDemoBusy(async () => {
+    const res = await fetch(`${API_BASE}/admin/demo/seed`, { method: "POST", headers: { Authorization: `Bearer ${adminToken}` } });
+    if (res.status === 401) {
+      signOut();
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not seed demo data.");
+    demoOwnerEmail.textContent = data.owner_email;
+    demoMemberEmail.textContent = data.member_email;
+    demoSummary.classList.remove("hidden");
+    if (data.member_access_code) {
+      demoMemberCode.textContent = data.member_access_code;
+      demoMemberCodeRow.classList.remove("hidden");
+    } else {
+      demoMemberCodeRow.classList.add("hidden");
+    }
+    showDemoSaved(data.created ? "Demo data seeded." : "Demo data already exists — reusing it.");
+  }));
+
+  openDemoBtn.addEventListener("click", () => withDemoBusy(async () => {
+    const res = await fetch(`${API_BASE}/admin/demo/login`, { method: "POST", headers: { Authorization: `Bearer ${adminToken}` } });
+    if (res.status === 401) {
+      signOut();
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not start a demo session.");
+    // Opens app.html signed in as the demo owner via the magic-link
+    // bootstrap both app.html and workspaces.html read on load (see
+    // bootstrapDemoSessionFromUrl there) — a new tab so the admin's own
+    // sign-in here is untouched.
+    const url = new URL("app.html", window.location.href);
+    url.searchParams.set("demo_token", data.token);
+    url.searchParams.set("demo_email", data.email);
+    window.open(url.toString(), "_blank", "noopener");
+  }));
+
+  disableDemoBtn.addEventListener("click", () => withDemoBusy(async () => {
+    const res = await fetch(`${API_BASE}/admin/demo/disable`, { method: "POST", headers: { Authorization: `Bearer ${adminToken}` } });
+    if (res.status === 401) {
+      signOut();
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not disable the demo account.");
+    showDemoSaved("Demo account disabled — both the owner's sign-in and the member's access code are blocked.");
+  }));
+
+  enableDemoBtn.addEventListener("click", () => withDemoBusy(async () => {
+    const res = await fetch(`${API_BASE}/admin/demo/enable`, { method: "POST", headers: { Authorization: `Bearer ${adminToken}` } });
+    if (res.status === 401) {
+      signOut();
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not enable the demo account.");
+    showDemoSaved("Demo account enabled.");
+  }));
+
+  wipeDemoDataBtn.addEventListener("click", () => {
+    if (!window.confirm("Delete the demo workspace and everything in it? The demo-owner and demo-member accounts stay, so you can seed a fresh workspace for them again afterward.")) return;
+    withDemoBusy(async () => {
+      const res = await fetch(`${API_BASE}/admin/demo/data`, { method: "DELETE", headers: { Authorization: `Bearer ${adminToken}` } });
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not delete the demo data.");
+      demoMemberCodeRow.classList.add("hidden");
+      showDemoSaved(`Deleted ${data.workspaces_deleted} demo workspace(s).`);
+    });
+  });
+
+  deleteDemoUsersBtn.addEventListener("click", () => {
+    if (!window.confirm("Permanently delete the demo-owner and demo-member accounts and everything they own? This can't be undone — seeding again afterward creates brand-new accounts.")) return;
+    withDemoBusy(async () => {
+      const res = await fetch(`${API_BASE}/admin/demo/user`, { method: "DELETE", headers: { Authorization: `Bearer ${adminToken}` } });
+      if (res.status === 401) {
+        signOut();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not delete the demo accounts.");
+      demoSummary.classList.add("hidden");
+      demoMemberCodeRow.classList.add("hidden");
+      showDemoSaved(`Deleted ${data.users_deleted} demo account(s).`);
+    });
+  });
 
   // ---------- Appearance (theme) ----------
 

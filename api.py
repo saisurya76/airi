@@ -47,6 +47,7 @@ from airi.auth import (
     verify_session_token,
 )
 from airi.ai_guide_provider import AiGuideUnavailable, GateGuideContext, generate_gate_checklist
+from airi.demo_seed import DEMO_MEMBER_EMAIL, DEMO_OWNER_EMAIL, seed_demo_data
 from airi.email_provider import EmailSendError, send_member_added_email, send_member_removed_email, send_otp_email
 from airi.exact_provider import ExactCountUnavailable, count_tokens_exact, has_exact_provider
 from airi.projector import MAX_ARCHETYPES
@@ -130,20 +131,28 @@ def _require_session_email(authorization: Optional[str]) -> str:
 
 
 def _require_session_email_and_user_id(authorization: Optional[str]) -> Tuple[str, int]:
-    """Resolves the session's email to a `users.id`, returning both — for
-    the one caller (the Exact tool-run endpoint) that needs the email
-    too, for rate limiting. A signed-in session with no matching user
-    row shouldn't happen (verify-code always upserts one first) —
-    treated as an expired/invalid session rather than a 500 if it
-    somehow does."""
+    """Resolves the session's email to a `users.id`, returning both — used
+    by nearly every signed-in endpoint now, not just the Exact tool-run
+    one this docstring originally described. A signed-in session with no
+    matching user row shouldn't happen (verify-code always upserts one
+    first) — treated as an expired/invalid session rather than a 500 if
+    it somehow does.
+
+    Also the one, central place `users.disabled` (sql/013) is checked —
+    every authenticated endpoint routes through here, so disabling an
+    account (see POST /admin/demo/disable) takes effect immediately
+    against an already-issued session token too, not just on that
+    account's next fresh login."""
     email = _require_session_email(authorization)
     try:
-        user_id = db.get_user_id_by_email(email)
+        user = db.get_user_by_email(email)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    if user_id is None:
+    if user is None:
         raise HTTPException(status_code=401, detail="Your session is no longer valid — sign in again.")
-    return email, user_id
+    if user["disabled"]:
+        raise HTTPException(status_code=403, detail="This account has been disabled.")
+    return email, user["id"]
 
 
 def _require_user_id(authorization: Optional[str]) -> int:
@@ -1940,6 +1949,170 @@ def admin_set_author(body: AuthorProfileBody, authorization: Optional[str] = Hea
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return saved
+
+
+# --- Admin: users list + usage, demo/test data ---
+#
+# Everything below is password-gated the same way as every other
+# /admin/* endpoint (_require_admin) — a different, site-wide gate from
+# the per-account session token every workspaces/projects endpoint
+# checks. See airi/demo_seed.py and sql/013_admin_demo_users.sql for the
+# design behind the demo endpoints; docs/ADMIN.md documents this section
+# for the admin dashboard user.
+
+
+@app.get("/admin/users")
+def admin_list_users(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: every account on this deployment, newest first, plus
+    an overall usage rollup per user (workspaces/projects owned, saved
+    tool runs, total estimated tokens/cost across every one of their
+    projects) — computed with the exact same
+    consolidated_report.aggregate_totals every user's own Dashboard/
+    Actions tab already uses, so a number here can never silently
+    disagree with what that user sees themselves. See
+    db.list_tool_runs_for_usage_rollup's docstring for why the merge
+    happens here in Python rather than as a second SQL implementation
+    of "what does a tool run's result count as"."""
+    _require_admin(authorization)
+    try:
+        users = db.list_users_for_admin()
+        runs = db.list_tool_runs_for_usage_rollup()
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    runs_by_user: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for row in runs:
+        runs_by_user[row["user_id"]].append({"tool": row["tool"], "result": row["result"]})
+
+    out = []
+    for u in users:
+        totals = consolidated_report.aggregate_totals(runs_by_user.get(u["id"], []))
+        out.append({
+            **u,
+            "total_runs": totals["total_runs"],
+            "total_tokens": totals["total_tokens"],
+            "total_cost": totals["total_cost"],
+        })
+    return out
+
+
+@app.post("/admin/demo/seed")
+def admin_seed_demo_data(authorization: Optional[str] = Header(default=None)):
+    """Admin-only. Idempotent in effect, not by construction: if the
+    demo owner already owns at least one workspace, this does nothing
+    and reports that existing workspace back instead of building a
+    second baseline on top of whatever the admin has since added by
+    hand through the UI — see seed_demo_data's own docstring for why
+    that check lives here rather than inside it. The first call creates
+    both demo accounts (see airi/demo_seed.py — neither has a real,
+    receivable email address) and a full baseline workspace: 5 projects
+    across every project type, saved tool runs, notes, and CoE
+    governance at both a Standard and a High risk tier."""
+    _require_admin(authorization)
+    secret = _get_auth_secret()
+    try:
+        existing_owner = db.get_demo_owner()
+        if existing_owner is not None:
+            owned = [w for w in db.list_workspaces(existing_owner["id"]) if w.get("role") == "admin"]
+            if owned:
+                return {
+                    "created": False,
+                    "workspace_id": owned[0]["id"],
+                    "workspace_title": owned[0]["title"],
+                    "owner_email": DEMO_OWNER_EMAIL,
+                    "member_email": DEMO_MEMBER_EMAIL,
+                    "member_access_code": None,
+                }
+        summary = seed_demo_data(secret)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"created": True, **summary}
+
+
+@app.post("/admin/demo/login")
+def admin_demo_login(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: mints a real session token for the demo owner account
+    directly (create_session_token — no OTP step, since that account
+    deliberately has no real, receivable inbox to send a code to). 400
+    if demo data hasn't been seeded yet; 403 if the demo account is
+    currently disabled (see POST /admin/demo/disable) — re-enable it
+    first rather than silently minting a token for a disabled account.
+    The admin dashboard turns the returned token into a one-click
+    "Open demo session" link (see frontend/admin.html)."""
+    _require_admin(authorization)
+    secret = _get_auth_secret()
+    try:
+        owner = db.get_demo_owner()
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if owner is None:
+        raise HTTPException(status_code=400, detail="No demo data yet — seed it first.")
+    if owner["disabled"]:
+        raise HTTPException(status_code=403, detail="The demo account is currently disabled — enable it first.")
+    return {"token": create_session_token(owner["email"], secret), "email": owner["email"]}
+
+
+@app.post("/admin/demo/disable")
+def admin_disable_demo(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: blocks every demo login path at once, without
+    touching any seeded data — the owner's OTP-free login (blocked via
+    users.disabled, checked centrally in
+    _require_session_email_and_user_id) and the demo member's ordinary
+    access-code login (blocked via workspace_members.status, same as
+    disabling any real member). Reversible — see POST /admin/demo/enable."""
+    _require_admin(authorization)
+    try:
+        users_affected = db.set_demo_users_disabled(True)
+        memberships_affected = db.set_demo_memberships_status("disabled")
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"disabled": True, "users_affected": users_affected, "memberships_affected": memberships_affected}
+
+
+@app.post("/admin/demo/enable")
+def admin_enable_demo(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: the reverse of POST /admin/demo/disable."""
+    _require_admin(authorization)
+    try:
+        users_affected = db.set_demo_users_disabled(False)
+        memberships_affected = db.set_demo_memberships_status("active")
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"disabled": False, "users_affected": users_affected, "memberships_affected": memberships_affected}
+
+
+@app.delete("/admin/demo/data")
+def admin_delete_demo_data(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: "delete this test user's data in one go" — wipes
+    every workspace a demo user owns, and, via the same
+    ON DELETE CASCADE chain every other delete in this app already
+    relies on, everything under them (projects, tool runs, notes, CoE
+    ledger, memberships). Leaves the demo accounts themselves in place,
+    so POST /admin/demo/login and the member's access code keep
+    working, and POST /admin/demo/seed can rebuild a fresh baseline
+    without recreating the accounts."""
+    _require_admin(authorization)
+    try:
+        deleted = db.delete_demo_workspaces()
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"workspaces_deleted": deleted}
+
+
+@app.delete("/admin/demo/user")
+def admin_delete_demo_users(authorization: Optional[str] = Header(default=None)):
+    """Admin-only: the full teardown. Deletes every is_demo user row
+    outright — cascading away their workspaces and everything under
+    them (same reach as DELETE /admin/demo/data), plus the accounts
+    themselves. After this, POST /admin/demo/login and the member's
+    access code stop working until POST /admin/demo/seed is run again
+    from scratch."""
+    _require_admin(authorization)
+    try:
+        deleted = db.delete_demo_users()
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"users_deleted": deleted}
 
 
 def _exact_input_for_storage(body: "ExactAnalyzeRequest") -> Dict[str, Any]:

@@ -279,6 +279,114 @@ heuristic fallback as always, with a deliberately generic
 `exact_mode_note` — never the provider's raw error text, to foreclose
 any chance of a response ever echoing back something key-shaped.
 
+## Users list + demo/test data
+
+Two more admin-page panels, both needing `sql/013_admin_demo_users.sql`
+(run once, after `001`–`012`, the same way as every other migration in
+this repo: `psql "$DATABASE_URL" -f sql/013_admin_demo_users.sql`). It
+adds two columns to `users`:
+
+- `is_demo` — true only for the handful of accounts the "Seed demo
+  data" button creates. Every demo action below targets rows by this
+  flag, and only this flag — never by matching on email — so there is
+  no way for a demo action to reach a real user's account.
+- `disabled` — a generic, reusable per-account kill switch, unrelated
+  to a workspace membership's own status (`workspace_members.status`,
+  `sql/006`). Checked once, centrally, in `api.py`'s
+  `_require_session_email_and_user_id` — the function nearly every
+  signed-in endpoint routes through — so disabling an account blocks
+  an already-issued session token immediately, not just that account's
+  next fresh login. (`GET /auth/me` is the one exception: it resolves
+  the user id a different way and doesn't reflect `disabled` — a known,
+  narrow gap, since the endpoints that matter for actually blocking
+  access all go through the central check.)
+
+### Users panel
+
+`GET /admin/users` (admin token required) returns every account,
+newest first, each with a usage rollup:
+
+```json
+[
+  {
+    "id": 7, "email": "someone@example.com",
+    "created_at": "...", "last_login_at": "...",
+    "is_demo": false, "disabled": false,
+    "workspace_count": 2, "project_count": 5,
+    "total_runs": 41, "total_tokens": 812345, "total_cost": 3.62
+  }
+]
+```
+
+`total_runs`/`total_tokens`/`total_cost` are summed across *every*
+workspace and project that user owns, using the exact same
+`airi.consolidated_report.aggregate_totals` a user's own Dashboard and
+Comparison tabs use one level down (one workspace at a time) — so the
+admin's number can never silently disagree with what that user sees
+themselves. The admin page's Users table renders this straight, with
+`demo`/`disabled` badges next to the email.
+
+### Demo data panel
+
+One seeded workspace, two accounts (`demo-owner@airi-demo.local`,
+`demo-member@airi-demo.local` — fixed, non-receivable addresses, both
+flagged `is_demo`), five projects covering every project type
+(API-request, license-request, SDLC-request), saved tool runs (Standard
+analyze, Traffic projection, Load-test report — see `airi/demo_seed.py`
+for why **Exact mode is deliberately never seeded**: it's the one tool
+whose entire value is a real, provider-verified count, and faking one
+would put a number on screen that looks verified but isn't), notes, and
+CoE governance walked through at two risk tiers (Standard and High,
+including one Mandatory gate left flagged rather than cleared, so the
+identity-enforcement restriction on clearing a gate is visible without
+extra setup).
+
+- **Seed demo data** — `POST /admin/demo/seed`. Idempotent in spirit:
+  if the demo owner already owns a workspace, it's reused rather than
+  duplicated (`{"created": false, ...}`), and no new member access code
+  is issued in that case (see below). A fresh seed returns
+  `member_access_code` once — write it down or use "Open demo session"
+  before doing anything else, since it isn't recoverable afterward
+  (only its hash is stored, same as any real access code).
+- **Open demo session** — `POST /admin/demo/login`. Mints a real
+  session JWT for the demo owner directly (`create_session_token`) and
+  opens `app.html` in a new tab with it — no OTP round trip, since
+  `demo-owner@airi-demo.local` can't receive one. This works because
+  AIRI sessions are self-contained signed JWTs with no server-side
+  session table (see `sql/001_auth_schema.sql`), so minting one for any
+  email needs no database write — safe here specifically because the
+  endpoint sits behind the same admin password as the rest of
+  `/admin/*`, not because of anything new. The new tab arrives at
+  `app.html?demo_token=...&demo_email=...`; both `app.html` and
+  `workspaces.html` read those query params once on load
+  (`bootstrapDemoSessionFromUrl`), store them under the same
+  `localStorage` keys a normal sign-in uses, and strip them from the
+  URL — the token is then validated against `GET /auth/me` exactly like
+  any other stored session, so a stale or disabled token still gets
+  rejected normally rather than trusting the URL blindly.
+- **Disable / Enable** — `POST /admin/demo/disable` /
+  `POST /admin/demo/enable`. There are two independent login paths in
+  this app (the owner's OTP/session-token path, and the demo member's
+  access-code path), and disabling the demo identity has to block both
+  at once: `disable` sets `users.disabled` for both demo accounts *and*
+  sets every related `workspace_members.status` to `"disabled"` in the
+  same call, so neither login path is left open. Re-enabling flips both
+  back.
+- **Delete demo data (keep accounts)** — `DELETE /admin/demo/data`.
+  Deletes the demo owner's workspace(s) — `ON DELETE CASCADE` takes
+  every project, tool run, note, and CoE event underneath it with it —
+  but keeps both demo accounts, so "Seed demo data" can build a fresh
+  workspace for them again without minting new accounts.
+- **Delete demo accounts entirely** — `DELETE /admin/demo/user`.
+  Deletes the `users` rows themselves; the same cascade chain wipes
+  everything they own in one statement. A later "Seed demo data" then
+  creates brand-new demo accounts from scratch.
+
+Building on top of the seeded data (adding projects, running more tool
+runs, inviting a real teammate into the demo workspace) is expected and
+safe — nothing about it is protected from normal editing, only from
+being silently duplicated by re-seeding.
+
 ## What this does *not* change
 
 - `/analyze`, `/project`, `/report*` are completely unaffected —
