@@ -69,9 +69,25 @@ def test_project_id_route_still_reports_not_found_for_a_real_int_path():
     print("OK: project_id_route_still_reports_not_found_for_a_real_int_path")
 
 
+def test_coe_toggle_rate_limits_are_more_generous_than_login():
+    """Regression guard for the 429 an admin hit doing completely normal
+    interactive use of the CoE toggle (flip a project on, cancel, retry,
+    flip it back off...): POST /auth/coe-governance/request-code used to
+    share /auth/request-code's strict 60s/5-per-day budget, which exists
+    to stop the ANONYMOUS, arbitrary-target login endpoint from spamming
+    a third party. The toggle endpoint only ever emails the already-
+    signed-in caller's own address, so it isn't that same abuse vector
+    and gets its own, deliberately looser limits — this pins that they
+    stay looser rather than silently drifting back to the login ones."""
+    assert api.COE_TOGGLE_REQUEST_COOLDOWN_SECONDS < api.OTP_REQUEST_COOLDOWN_SECONDS
+    assert api.COE_TOGGLE_DAILY_REQUEST_LIMIT > api.OTP_DAILY_REQUEST_LIMIT
+    print("OK: coe_toggle_rate_limits_are_more_generous_than_login")
+
+
 if __name__ == "__main__":
     test_coe_catalog_route_is_not_shadowed_by_project_id()
     test_tech_stack_categories_route_is_not_shadowed_by_project_id()
     test_project_types_route_is_not_shadowed_by_project_id()
     test_project_id_route_still_reports_not_found_for_a_real_int_path()
+    test_coe_toggle_rate_limits_are_more_generous_than_login()
     print("\nAll api route sanity checks passed.")

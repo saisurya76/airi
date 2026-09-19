@@ -60,6 +60,23 @@ OTP_REQUEST_COOLDOWN_SECONDS = 60   # per email, between code requests
 OTP_DAILY_REQUEST_LIMIT = 5         # per email, per rolling 24h — protects the shared Resend daily quota
 EXACT_CALLS_PER_MINUTE = 20         # per signed-in user — protects the shared Anthropic/Google API keys
 
+# The CoE-toggle step-up code (POST /auth/coe-governance/request-code)
+# gets its OWN, more generous limits — deliberately not OTP_REQUEST_
+# COOLDOWN_SECONDS/OTP_DAILY_REQUEST_LIMIT above, even though it's the
+# same underlying OTP machinery. Those two exist to stop the anonymous,
+# unauthenticated /auth/request-code from being used to spam an
+# arbitrary third-party inbox (its `email` comes straight from the
+# request body). This endpoint can't do that: it only ever emails the
+# ALREADY-signed-in caller's OWN address, so the worst case is a user
+# (or a bug) emailing themselves too often — annoying, not third-party
+# abuse — and a workspace admin toggling governance across several
+# projects, or retyping a mistyped code, is normal use, not abuse. 5/day
+# shared with login turned out to be so tight that ordinary interactive
+# use of this feature tripped it (see docs/WORKSPACES.md's "The two
+# switches").
+COE_TOGGLE_REQUEST_COOLDOWN_SECONDS = 15  # just enough to absorb an accidental double-click
+COE_TOGGLE_DAILY_REQUEST_LIMIT = 30       # per email, per rolling 24h
+
 
 def _get_auth_secret() -> str:
     secret = os.environ.get("AUTH_SECRET")
@@ -829,17 +846,20 @@ def request_coe_governance_code(authorization: Optional[str] = Header(default=No
     check whether this caller is actually the admin of the specific
     workspace/project they're trying to toggle.
 
-    Same OTP machinery as /auth/request-code (code generation, hashing,
-    rate limiting), stored under a different purpose (see
-    airi.auth.COE_TOGGLE_OTP_PURPOSE) so this can never be satisfied by,
-    or collide with, an ordinary sign-in code."""
+    Same OTP machinery as /auth/request-code (code generation, hashing),
+    stored under a different purpose (see airi.auth.COE_TOGGLE_OTP_PURPOSE)
+    so this can never be satisfied by, or collide with, an ordinary
+    sign-in code — but its own, more generous rate limits (see
+    COE_TOGGLE_REQUEST_COOLDOWN_SECONDS/COE_TOGGLE_DAILY_REQUEST_LIMIT
+    above), since this always emails the caller's own already-signed-in
+    address rather than an arbitrary one."""
     email, _user_id = _require_session_email_and_user_id(authorization)
     pepper = _get_auth_secret()
     now = datetime.now(timezone.utc)
     try:
-        if db.count_recent_otp_requests(email, now - timedelta(seconds=OTP_REQUEST_COOLDOWN_SECONDS), purpose=COE_TOGGLE_OTP_PURPOSE) > 0:
-            raise HTTPException(status_code=429, detail="Please wait a minute before requesting another code.")
-        if db.count_recent_otp_requests(email, now - timedelta(hours=24), purpose=COE_TOGGLE_OTP_PURPOSE) >= OTP_DAILY_REQUEST_LIMIT:
+        if db.count_recent_otp_requests(email, now - timedelta(seconds=COE_TOGGLE_REQUEST_COOLDOWN_SECONDS), purpose=COE_TOGGLE_OTP_PURPOSE) > 0:
+            raise HTTPException(status_code=429, detail="Please wait a few seconds before requesting another code.")
+        if db.count_recent_otp_requests(email, now - timedelta(hours=24), purpose=COE_TOGGLE_OTP_PURPOSE) >= COE_TOGGLE_DAILY_REQUEST_LIMIT:
             raise HTTPException(status_code=429, detail="Too many code requests for this email today — try again tomorrow.")
 
         code = generate_code()
