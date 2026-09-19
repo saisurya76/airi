@@ -160,15 +160,19 @@ def validate_tech_stack(data: Dict[str, Any], require_full: bool = True) -> Dict
 
 # ---------- projects: type ----------
 #
-# Every project is one of three request types. "api_request" is the
-# original (and, until this field existed, only) kind — a project whose
-# saved runs come from AIRI's four API-traffic tools (Standard, Exact,
-# Traffic projection, Load-test report). "license_request" and
-# "sdlc_request" mirror the two newer demo wizards (frontend/
-# license-wizard.html, frontend/sdlc-wizard.html) — a project of either
-# kind is for organizing that request and its notes, not for running the
-# API-traffic tools, which don't apply to a per-seat license or a dev-tool
-# seat/usage request.
+# Every project is one of four types. "api_request" is the original
+# (and, until this field existed, only) kind — a project whose saved
+# runs come from AIRI's four API-traffic tools (Standard, Exact, Traffic
+# projection, Load-test report). "license_request" and "sdlc_request"
+# mirror the two newer demo wizards (frontend/license-wizard.html,
+# frontend/sdlc-wizard.html) — a project of either kind is for
+# organizing that request and its notes, not for running the
+# API-traffic tools, which don't apply to a per-seat license or a
+# dev-tool seat/usage request. "coe_initiative" doesn't capture a new
+# idea of its own — it governs one that's already been captured as one
+# of the other three types (see coe_linked_project_id below), which is
+# why it needs an existing project to point at rather than a tech stack
+# of its own.
 
 PROJECT_TYPES = {
     "api_request": {"label": "API request"},
@@ -190,9 +194,19 @@ def validate_project_type(value: Any) -> str:
     return value
 
 
-def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], str]:
-    """Returns (title, description, tech_stack, project_type). Raises
-    WorkspaceError on the first problem found."""
+def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], str, Optional[int]]:
+    """Returns (title, description, tech_stack, project_type,
+    coe_linked_project_id). Raises WorkspaceError on the first problem
+    found.
+
+    coe_linked_project_id is only meaningful for project_type ==
+    "coe_initiative" — required there (a CoE initiative governs an
+    existing idea, it doesn't capture a new one), forced to None for
+    every other type regardless of what was submitted. This module has
+    no DB access, so it can only check that the id is *present and
+    shaped like* an id; the caller (api.py) is the one that confirms it
+    actually names a project in the same workspace that isn't itself a
+    coe_initiative, and turns a failure there into a 400 the same way."""
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
 
@@ -205,7 +219,21 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
 
     project_type = validate_project_type(data.get("project_type"))
     tech_stack = validate_tech_stack(data.get("tech_stack") or {}, require_full=(project_type == "api_request"))
-    return title, description, tech_stack, project_type
+
+    coe_linked_project_id: Optional[int] = None
+    if project_type == "coe_initiative":
+        raw = data.get("coe_linked_project_id")
+        if not raw:
+            raise WorkspaceError(
+                "A CoE initiative governs an existing project — create an API/License/SDLC "
+                "request project first, then link it here."
+            )
+        try:
+            coe_linked_project_id = int(raw)
+        except (TypeError, ValueError):
+            raise WorkspaceError("coe_linked_project_id must be a project id.")
+
+    return title, description, tech_stack, project_type, coe_linked_project_id
 
 
 # ---------- projects: CoE governance ----------

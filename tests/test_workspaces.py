@@ -163,13 +163,14 @@ def test_validate_tech_stack_rejects_non_string_value():
 # ---------- project fields ----------
 
 def test_validate_project_fields_happy_path():
-    title, desc, tech_stack, project_type = ws.validate_project_fields(
+    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
         {"title": " My Project ", "description": " d ", "tech_stack": _valid_tech_stack()}
     )
     assert title == "My Project"
     assert desc == "d"
     assert tech_stack["ai_model"] == "claude-3-5-sonnet"
     assert project_type == "api_request"  # default, since none was given
+    assert coe_linked_project_id is None
     print("OK: validate_project_fields_happy_path")
 
 
@@ -228,13 +229,14 @@ def test_validate_project_type_rejects_unknown_value():
 
 
 def test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack():
-    for project_type in ("license_request", "sdlc_request", "coe_initiative"):
-        title, desc, tech_stack, returned_type = ws.validate_project_fields(
+    for project_type in ("license_request", "sdlc_request"):
+        title, desc, tech_stack, returned_type, coe_linked_project_id = ws.validate_project_fields(
             {"title": "ok", "project_type": project_type}  # no tech_stack at all
         )
         assert returned_type == project_type
         assert tech_stack["ai_services"] == ""  # not required, and not supplied
         assert tech_stack["ai_model"] == ""
+        assert coe_linked_project_id is None
     print("OK: validate_project_fields_license_and_sdlc_types_dont_require_tech_stack")
 
 
@@ -245,6 +247,49 @@ def test_validate_project_fields_propagates_unknown_project_type():
     except ws.WorkspaceError as e:
         assert "unknown project type" in str(e).lower()
     print("OK: validate_project_fields_propagates_unknown_project_type")
+
+
+# ---------- CoE initiative <-> linked project ----------
+
+def test_validate_project_fields_coe_initiative_requires_link():
+    try:
+        ws.validate_project_fields({"title": "Governance for X", "project_type": "coe_initiative"})
+        assert False, "should have raised"
+    except ws.WorkspaceError as e:
+        assert "link" in str(e).lower()
+    print("OK: validate_project_fields_coe_initiative_requires_link")
+
+
+def test_validate_project_fields_coe_initiative_accepts_link():
+    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
+        {"title": "Governance for X", "project_type": "coe_initiative", "coe_linked_project_id": 42}
+    )
+    assert project_type == "coe_initiative"
+    assert coe_linked_project_id == 42
+    # not required to fill in the (inapplicable) tech stack for this type
+    assert tech_stack["ai_services"] == ""
+    print("OK: validate_project_fields_coe_initiative_accepts_link")
+
+
+def test_validate_project_fields_coe_initiative_rejects_non_numeric_link():
+    try:
+        ws.validate_project_fields(
+            {"title": "Governance for X", "project_type": "coe_initiative", "coe_linked_project_id": "not-a-number"}
+        )
+        assert False, "should have raised"
+    except ws.WorkspaceError as e:
+        assert "project id" in str(e).lower()
+    print("OK: validate_project_fields_coe_initiative_rejects_non_numeric_link")
+
+
+def test_validate_project_fields_ignores_link_for_non_coe_types():
+    # A link value submitted for a non-coe_initiative type is just
+    # discarded rather than erroring — it's meaningless there.
+    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
+        {"title": "ok", "project_type": "api_request", "coe_linked_project_id": 99, "tech_stack": _valid_tech_stack()}
+    )
+    assert coe_linked_project_id is None
+    print("OK: validate_project_fields_ignores_link_for_non_coe_types")
 
 
 # ---------- CoE governance: risk tier ----------
@@ -428,6 +473,10 @@ if __name__ == "__main__":
     test_validate_project_type_rejects_unknown_value()
     test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack()
     test_validate_project_fields_propagates_unknown_project_type()
+    test_validate_project_fields_coe_initiative_requires_link()
+    test_validate_project_fields_coe_initiative_accepts_link()
+    test_validate_project_fields_coe_initiative_rejects_non_numeric_link()
+    test_validate_project_fields_ignores_link_for_non_coe_types()
     test_validate_risk_answers_requires_all_four_factors()
     test_validate_risk_answers_rejects_unknown_value()
     test_compute_risk_tier_all_lowest_is_low()

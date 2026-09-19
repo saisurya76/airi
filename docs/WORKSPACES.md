@@ -481,11 +481,31 @@ initiative and to get genuinely hard to bypass for a high-risk one.
 (`risk_tier`, `risk_factors`, `risk_explanation`, `coe_roles`,
 `coe_phase_state` — all unused/NULL for the other three project types,
 same convention as `tech_stack`) plus one new append-only table,
-`coe_control_events`, for the decision ledger. The catalogs
-themselves (risk factors, gates, roles) are server-defined Python
-constants in `airi/workspaces.py`, not new tables — same pattern as
-`TECH_STACK_CATEGORIES` — served unauthenticated via `GET
-/projects/coe-catalog` so the frontend never hardcodes them.
+`coe_control_events`, for the decision ledger; `sql/009_coe_linked_project.sql`
+adds a 6th column, `coe_linked_project_id` (see "Governing an existing
+idea" below). The catalogs themselves (risk factors, gates, roles) are
+server-defined Python constants in `airi/workspaces.py`, not new
+tables — same pattern as `TECH_STACK_CATEGORIES` — served
+unauthenticated via `GET /projects/coe-catalog` so the frontend never
+hardcodes them.
+
+### Governing an existing idea, not capturing a new one
+
+A `coe_initiative` doesn't have its own tech stack or notes-worthy
+"idea" — it governs one that's already been captured as an
+`api_request`/`license_request`/`sdlc_request` project in the same
+workspace, via `coe_linked_project_id` (nullable, `ON DELETE SET NULL`
+so a later deletion of the governed project doesn't take the
+initiative's ledger down with it). `ws.validate_project_fields`
+requires it for a `coe_initiative` and forces it to `None` for every
+other type; `api.py`'s `_validate_coe_link` does the DB-backed half
+that module can't (the id has to name a project in the *same*
+workspace, and can't itself be a `coe_initiative` — an initiative
+governs an idea, not another initiative). The "New project" form only
+shows the picker once `project_type = coe_initiative` is selected, and
+only lists eligible projects — if the workspace has none yet, it says
+so instead of letting the initiative be created ownerless. The
+Governance tab always shows which project it's governing at the top.
 
 ### Risk tiering: worst-factor-wins
 
@@ -550,6 +570,7 @@ renders it as a collapsed "History" section, reusing the
 
 | Endpoint | Purpose |
 |---|---|
+| `POST /workspaces/{id}/projects` / `PUT /projects/{id}` | Extended with `coe_linked_project_id`: required (and DB-validated via `_validate_coe_link`) when `project_type = "coe_initiative"`, ignored otherwise. `400`s with "A CoE initiative governs an existing project..." if missing, or "Linked project not found in this workspace." / "A CoE initiative can't govern another CoE initiative." if invalid. |
 | `GET /projects/coe-catalog` | Unauthenticated. Returns `RISK_FACTORS`, `COE_GATES`, `ACCOUNTABLE_ROLES`, `ENFORCEMENT_LOOKUP` so the frontend never hardcodes them. |
 | `PUT /projects/{id}/coe-risk` | Body: one answer per `RISK_FACTORS` key. Computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
 | `PUT /projects/{id}/coe-roles` | Admin-only. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |

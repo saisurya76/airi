@@ -185,6 +185,22 @@ def _require_project_admin(project_id: int, user_id: int) -> Tuple[dict, dict]:
     return proj, workspace
 
 
+def _validate_coe_link(workspace_id: int, project_type: str, coe_linked_project_id: Optional[int]) -> None:
+    """ws.validate_project_fields already confirmed coe_linked_project_id
+    is present (and int-shaped) for a coe_initiative, and None for every
+    other type — this is the DB-backed half it can't do itself: the id
+    has to actually name a project in the *same* workspace, and can't be
+    a coe_initiative itself (an initiative governs an idea, not another
+    initiative)."""
+    if project_type != "coe_initiative":
+        return
+    linked = db.get_project(coe_linked_project_id)
+    if linked is None or linked["workspace_id"] != workspace_id:
+        raise HTTPException(status_code=400, detail="Linked project not found in this workspace.")
+    if linked["project_type"] == "coe_initiative":
+        raise HTTPException(status_code=400, detail="A CoE initiative can't govern another CoE initiative.")
+
+
 def _require_app_key_confirmed(user_id: int, submitted_app_key: Optional[str]) -> None:
     """Gate for every destructive workspace/project action (requirement:
     re-enter the profile app key before any delete). 400 either way —
@@ -408,6 +424,7 @@ class ProjectBody(BaseModel):
     description: str = ""
     tech_stack: Dict[str, str] = Field(default_factory=dict)
     project_type: str = ws.DEFAULT_PROJECT_TYPE
+    coe_linked_project_id: Optional[int] = None
 
 
 class NoteBody(BaseModel):
@@ -1025,10 +1042,14 @@ def create_project(workspace_id: int, body: ProjectBody, authorization: Optional
     user_id = _require_user_id(authorization)
     _require_workspace_admin(workspace_id, user_id)
     try:
-        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {**db.create_project(workspace_id, title, description, tech_stack, project_type), "role": "admin"}
+    _validate_coe_link(workspace_id, project_type, coe_linked_project_id)
+    return {
+        **db.create_project(workspace_id, title, description, tech_stack, project_type, coe_linked_project_id),
+        "role": "admin",
+    }
 
 
 @app.get("/projects/{project_id}")
@@ -1044,12 +1065,16 @@ def update_project(project_id: int, body: ProjectBody, authorization: Optional[s
     type, or change its tech stack, only work inside it (run tools, add
     notes)."""
     user_id = _require_user_id(authorization)
-    _require_project_admin(project_id, user_id)
+    proj, _workspace = _require_project_admin(project_id, user_id)
     try:
-        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {**db.update_project(project_id, title, description, tech_stack, project_type), "role": "admin"}
+    _validate_coe_link(proj["workspace_id"], project_type, coe_linked_project_id)
+    return {
+        **db.update_project(project_id, title, description, tech_stack, project_type, coe_linked_project_id),
+        "role": "admin",
+    }
 
 
 @app.delete("/projects/{project_id}")

@@ -543,6 +543,7 @@
               <label>Project type <span class="required-mark">*</span></label>
               <div class="project-type-row" id="newProjTypeRow"></div>
             </div>
+            <div id="newProjLinkField" class="hidden"></div>
             <div class="field">
               <label for="newProjTitle">Title <span class="required-mark">*</span></label>
               <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
@@ -1318,11 +1319,51 @@
       <a href="${link.href}" target="_blank" rel="noopener">Open the ${escapeHtml(link.label)} →</a>`;
   }
 
+  // A coe_initiative doesn't capture a new idea — it governs one that's
+  // already an api_request/license_request/sdlc_request project in this
+  // same workspace. excludeProjectId drops the project being edited out
+  // of its own candidate list (only relevant when editing an existing
+  // project, never for "New project").
+  function coeLinkCandidates(excludeProjectId) {
+    return (currentWorkspace.projects || []).filter(
+      (p) => (p.project_type || "api_request") !== "coe_initiative" && p.id !== excludeProjectId
+    );
+  }
+
+  function coeLinkFieldHtml(candidates, selectedId) {
+    if (!candidates.length) {
+      return `
+        <div class="field">
+          <label>Governs which project? <span class="required-mark">*</span></label>
+          <p class="sub" style="margin:4px 0 0;">This workspace doesn't have an API/License/SDLC request
+            project yet — create one first, then come back and add the CoE initiative to govern it.</p>
+        </div>
+      `;
+    }
+    return `
+      <div class="field">
+        <label>Governs which project? <span class="required-mark">*</span></label>
+        <select data-coe-link-select>
+          <option value="">Choose a project…</option>
+          ${candidates.map((p) => `
+            <option value="${p.id}"${p.id === selectedId ? " selected" : ""}>${escapeHtml(p.title)} — ${escapeHtml(projectTypeLabel(p.project_type || "api_request"))}</option>
+          `).join("")}
+        </select>
+      </div>
+    `;
+  }
+
+  function readCoeLinkedProjectId(linkFieldEl) {
+    const select = linkFieldEl && linkFieldEl.querySelector("[data-coe-link-select]");
+    return select && select.value ? Number(select.value) : null;
+  }
+
   // Wires a project-type radio row so picking a type toggles that same
-  // form's tech-stack grid (only "API request" needs it) and, for the
-  // two newer types, shows the wizard note. Shared by the "New project"
-  // form and each project's "Details" edit form.
-  function wireProjectTypeRow(rowEl, techStackEl, wizardNoteEl) {
+  // form's tech-stack grid (only "API request" needs it), the "governs
+  // which project" picker (only "CoE initiative" needs it), and, for the
+  // two demo-wizard types, shows the wizard note. Shared by the "New
+  // project" form and each project's "Details" edit form.
+  function wireProjectTypeRow(rowEl, techStackEl, wizardNoteEl, linkFieldEl, excludeProjectId, selectedLinkId) {
     const applyForType = (type) => {
       rowEl.querySelectorAll("label").forEach((label) => {
         const input = label.querySelector("input[data-project-type-radio]");
@@ -1333,6 +1374,14 @@
         const note = wizardNoteHtml(type);
         wizardNoteEl.innerHTML = note;
         wizardNoteEl.classList.toggle("hidden", !note);
+      }
+      if (linkFieldEl) {
+        const isCoe = type === "coe_initiative";
+        linkFieldEl.classList.toggle("hidden", !isCoe);
+        if (isCoe && !linkFieldEl.dataset.rendered) {
+          linkFieldEl.dataset.rendered = "1";
+          linkFieldEl.innerHTML = coeLinkFieldHtml(coeLinkCandidates(excludeProjectId), selectedLinkId);
+        }
       }
     };
     rowEl.querySelectorAll("input[data-project-type-radio]").forEach((input) => {
@@ -1345,10 +1394,16 @@
   function renderNewProjectForm() {
     newProjTechStack.innerHTML = techStackFieldsHtml("new-proj", {});
     document.getElementById("newProjTypeRow").innerHTML = projectTypeRadiosHtml("new-proj", "api_request");
+    const linkFieldEl = document.getElementById("newProjLinkField");
+    linkFieldEl.innerHTML = "";
+    delete linkFieldEl.dataset.rendered;
     wireProjectTypeRow(
       document.getElementById("newProjTypeRow"),
       newProjTechStack,
-      document.getElementById("newProjWizardNote")
+      document.getElementById("newProjWizardNote"),
+      linkFieldEl,
+      null,
+      null
     );
   }
 
@@ -1428,6 +1483,7 @@
             <div class="project-type-row" id="${idPrefix}-type-row"></div>
             ${!isApiProject ? `<div class="tab-note" style="margin-top:10px;">Switching back to <b>API request</b> will show the tech-stack fields below and the Standard/Exact/Traffic/Load-test tabs again — nothing already saved is deleted.</div>` : ""}
           </div>
+          <div id="${idPrefix}-link-field" class="hidden"></div>
           <div class="field">
             <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
             <input id="${idPrefix}-title" value="${escapeHtml(p.title)}"${isAdmin ? "" : " disabled"} />
@@ -1457,10 +1513,14 @@
 
       document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack, !isAdmin);
       document.getElementById(`${idPrefix}-type-row`).innerHTML = projectTypeRadiosHtml(idPrefix, projectType, !isAdmin);
+      const linkFieldEl = document.getElementById(`${idPrefix}-link-field`);
       wireProjectTypeRow(
         document.getElementById(`${idPrefix}-type-row`),
         document.getElementById(`${idPrefix}-stack`),
-        null
+        null,
+        linkFieldEl,
+        p.id,
+        p.coe_linked_project_id
       );
 
       if (isAdmin) {
@@ -1472,6 +1532,7 @@
             description: document.getElementById(`${idPrefix}-description`).value.trim(),
             tech_stack: readTechStackFields(idPrefix),
             project_type: readProjectType(idPrefix),
+            coe_linked_project_id: readCoeLinkedProjectId(linkFieldEl),
           };
           try {
             const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -1529,6 +1590,7 @@
       description: document.getElementById("newProjDescription").value.trim(),
       tech_stack: readTechStackFields("new-proj"),
       project_type: readProjectType("new-proj"),
+      coe_linked_project_id: readCoeLinkedProjectId(document.getElementById("newProjLinkField")),
     };
     try {
       const project = await apiFetch(`/workspaces/${currentWorkspace.id}/projects`, { method: "POST", body: JSON.stringify(payload) });
@@ -2157,14 +2219,25 @@
     });
   }
 
+  function governedProjectLineHtml(project) {
+    const linkedId = project.coe_linked_project_id;
+    if (!linkedId) return "";
+    const linked = (currentWorkspace.projects || []).find((p) => p.id === linkedId);
+    const label = linked
+      ? `${escapeHtml(linked.title)} <span class="type-badge type-${linked.project_type || "api_request"}">${escapeHtml(projectTypeLabel(linked.project_type || "api_request"))}</span>`
+      : `<i>a project that's since been deleted</i>`;
+    return `<p class="sub" style="margin:0 0 14px;">Governing: ${label}</p>`;
+  }
+
   function renderGovernancePanel(project, panelEl, isAdmin) {
     const idPrefix = `proj-${project.id}-risk`;
     if (!project.risk_tier) {
-      panelEl.innerHTML = riskFormHtml(idPrefix, project.risk_factors);
+      panelEl.innerHTML = governedProjectLineHtml(project) + riskFormHtml(idPrefix, project.risk_factors);
       wireRiskForm(project, panelEl, idPrefix, () => renderGovernancePanel(project, panelEl, isAdmin));
       return;
     }
     panelEl.innerHTML = `
+      ${governedProjectLineHtml(project)}
       ${riskBannerHtml(project)}
       <h3 style="margin-top:18px;">The 6 gates</h3>
       ${gatesListHtml(project)}
