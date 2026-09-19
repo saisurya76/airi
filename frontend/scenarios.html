@@ -106,9 +106,21 @@
   // early as possible and the flash of the built-in default (Midnight)
   // look is brief. Fails open — the page keeps its default look — on
   // any error, same convention as the site-visibility check elsewhere.
+  //
+  // Every page navigation re-runs this from scratch, and the fetch
+  // takes a moment even on a fast connection — with a non-default theme
+  // active (e.g. a light "day" theme), that gap showed as this page's
+  // hardcoded dark :root defaults flashing on screen before flipping to
+  // the real colors (reported as "the page goes black and comes back to
+  // white" when clicking a link styled as a button). Caching the last
+  // resolved colors in sessionStorage and applying them synchronously,
+  // before the network round trip even starts, removes that flash for
+  // every navigation after the first page load in a tab — the fetch
+  // still runs and corrects anything that's actually changed.
   (function () {
     var API_BASE = "https://airi-mvp-api.onrender.com";
     var VARS = ["bg", "panel", "border", "text", "muted", "accent", "safe", "warning", "exceeded", "inset"];
+    var CACHE_KEY = "airi_theme_cache_v1";
 
     function parseTime(hhmm) {
       var parts = (hhmm || "").split(":");
@@ -135,19 +147,42 @@
     }
 
     function applyVars(vars) {
+      if (!vars) return;
       var root = document.documentElement.style;
       for (var i = 0; i < VARS.length; i++) {
-        if (vars && vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
+        if (vars[VARS[i]]) root.setProperty("--" + VARS[i], vars[VARS[i]]);
       }
       // Buttons, badges and active nav pills paint their text on top of
       // --accent, and accent hues range from pale (night variants) to
       // richly saturated (day variants, chosen for contrast against a
       // white page) — one hardcoded text color can't read on both, so
       // pick light or dark text from the accent's own brightness.
-      if (vars && vars.accent) {
+      if (vars.accent) {
         root.setProperty("--on-accent", luminance(vars.accent) < 140 ? "#f5f6fa" : "#0f1115");
       }
     }
+
+    function readCache() {
+      try {
+        var raw = sessionStorage.getItem(CACHE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        return null; // private mode / storage disabled — fine, just no cache
+      }
+    }
+
+    function writeCache(vars) {
+      try {
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify(vars));
+      } catch (e) {
+        // Fine — this is a same-tab convenience, not required for correctness.
+      }
+    }
+
+    // Apply last-known colors immediately, synchronously, before the
+    // network fetch below even starts — this is what actually removes
+    // the black-then-white flash on navigation between pages.
+    applyVars(readCache());
 
     Promise.all([
       fetch(API_BASE + "/config").then(function (r) { return r.json(); }),
@@ -161,11 +196,16 @@
       }
       if (!active) active = themes[0];
       if (!active) return;
-      function apply() { applyVars(isNight(cfg) ? active.night : active.day); }
+      function apply() {
+        var vars = isNight(cfg) ? active.night : active.day;
+        applyVars(vars);
+        writeCache(vars);
+      }
       apply();
       if (cfg.theme_auto_day_night) setInterval(apply, 60000);
     }).catch(function () {
-      // Fail open — page keeps its built-in default (Midnight/night) look.
+      // Fail open — page keeps its built-in default (Midnight/night) look,
+      // or whatever was cached from a previous successful load.
     });
   })();
 </script>
