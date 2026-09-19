@@ -155,11 +155,12 @@ def _seed_coe(project_id: int, owner_user_id: int, member_user_id: int, risk_ans
 
 
 def seed_demo_data(secret: str) -> Dict[str, Any]:
-    """Idempotent in spirit, not by construction: api.py's endpoint only
-    calls this when the demo owner doesn't already own a workspace (see
-    POST /admin/demo/seed's own docstring) — this function itself always
-    builds a fresh baseline, so it's the caller's job not to double-call
-    it into a workspace someone (the admin) has since built on top of.
+    """Always builds a fresh baseline workspace — this function has no
+    idea whether a demo workspace already exists, and doesn't check;
+    that's POST /admin/demo/seed's job (it wipes any existing one first
+    — see its own docstring for why "reuse instead of rebuild" was
+    tried and dropped). Calling this with a demo workspace still around
+    would just create a second one, not merge into it.
 
     `secret` is AUTH_SECRET, needed only to hash the demo member's
     access code the exact same way POST /workspaces/{id}/members does

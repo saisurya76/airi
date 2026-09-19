@@ -351,13 +351,19 @@ which leave every role unassigned on purpose — demonstrating that a
 solo/small workspace needs no role setup at all, since an unassigned
 role just defaults to the workspace admin.
 
-- **Seed demo data** — `POST /admin/demo/seed`. Idempotent in spirit:
-  if the demo owner already owns a workspace, it's reused rather than
-  duplicated (`{"created": false, ...}`), and no new member access code
-  is issued in that case (see below). A fresh seed returns
-  `member_access_code` once — write it down or use "Get a fresh access
-  code" any time afterward, since it isn't recoverable otherwise (only
-  its hash is stored, same as any real access code).
+- **Seed demo data** — `POST /admin/demo/seed`. Always rebuilds from
+  scratch: wipes any workspace(s) the demo owner already owns (same
+  reach as "Delete demo data (keep accounts)" below, a no-op the first
+  time), then seeds a brand-new one. This used to reuse an existing
+  workspace instead of rebuilding it — dropped because it made a second
+  click of this button silently do nothing useful once seeded once,
+  including after `airi/demo_seed.py`'s own baseline changed, which was
+  confusingly stale. Building on top of the demo data for real should
+  follow the panel's own copy: fine to add to, but not protected from a
+  later reseed. Every call returns a real, freshly-generated
+  `member_access_code` — write it down, or use "Get a fresh access
+  code" (below) any time afterward, since it isn't recoverable
+  otherwise (only its hash is stored, same as any real access code).
 - **Get a fresh access code** — `POST /admin/demo/member-code`. A thin
   admin-password-gated wrapper around the exact same path a real
   workspace admin already has (`POST

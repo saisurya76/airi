@@ -850,16 +850,15 @@
     }
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Could not seed demo data.");
+    // Seeding always rebuilds from scratch now (see POST /admin/demo/seed's
+    // docstring) — every call returns a real, fresh member_access_code,
+    // never a reused workspace with no code to show.
     demoOwnerEmail.textContent = data.owner_email;
     demoMemberEmail.textContent = data.member_email;
     demoSummary.classList.remove("hidden");
-    if (data.member_access_code) {
-      demoMemberCode.textContent = data.member_access_code;
-      demoMemberCodeRow.classList.remove("hidden");
-    } else {
-      demoMemberCodeRow.classList.add("hidden");
-    }
-    showDemoSaved(data.created ? "Demo data seeded." : "Demo data already exists — reusing it.");
+    demoMemberCode.textContent = data.member_access_code;
+    demoMemberCodeRow.classList.remove("hidden");
+    showDemoSaved("Demo data rebuilt from scratch — 5 projects, fresh baseline.");
   }));
 
   getMemberCodeBtn.addEventListener("click", () => withDemoBusy(async () => {

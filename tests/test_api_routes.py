@@ -127,6 +127,27 @@ def test_admin_demo_and_users_routes_are_registered_and_password_gated():
     print("OK: admin_demo_and_users_routes_are_registered_and_password_gated")
 
 
+def test_demo_seed_always_wipes_before_rebuilding():
+    """Regression guard for the staleness bug reported against the live
+    deployment: a second "Seed demo data" click used to silently reuse
+    whatever workspace the demo owner already had, so it never reflected
+    later changes to airi/demo_seed.py's baseline (e.g. more CoE gates
+    filled in) until an admin remembered to separately wipe first. Pins
+    that admin_seed_demo_data always calls delete_demo_workspaces
+    (idempotent — a no-op if there's nothing yet) before seed_demo_data,
+    so "Seed demo data" alone is always enough to get the current
+    baseline, no separate wipe step required."""
+    import inspect
+    seed_src = inspect.getsource(api.admin_seed_demo_data)
+    # "seed_demo_data(" alone would also match this function's own
+    # "def admin_seed_demo_data(" signature line, so pin the actual call
+    # (with its argument) instead.
+    assert "db.delete_demo_workspaces()" in seed_src
+    assert "seed_demo_data(secret)" in seed_src
+    assert seed_src.index("db.delete_demo_workspaces()") < seed_src.index("seed_demo_data(secret)")
+    print("OK: demo_seed_always_wipes_before_rebuilding")
+
+
 def test_demo_disable_flips_both_demo_login_paths_not_just_one():
     """Regression guard: disabling the demo identity has to block BOTH
     the owner's OTP-free login (users.disabled) and the member's
@@ -199,6 +220,7 @@ if __name__ == "__main__":
     test_ai_guide_route_is_registered_and_shaped_correctly()
     test_ai_guide_rate_limit_is_its_own_separate_budget()
     test_admin_demo_and_users_routes_are_registered_and_password_gated()
+    test_demo_seed_always_wipes_before_rebuilding()
     test_demo_disable_flips_both_demo_login_paths_not_just_one()
     test_disabled_user_is_rejected_even_with_a_valid_session_token()
     test_coe_toggle_rate_limits_are_more_generous_than_login()

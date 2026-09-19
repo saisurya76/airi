@@ -1998,31 +1998,33 @@ def admin_list_users(authorization: Optional[str] = Header(default=None)):
 
 @app.post("/admin/demo/seed")
 def admin_seed_demo_data(authorization: Optional[str] = Header(default=None)):
-    """Admin-only. Idempotent in effect, not by construction: if the
-    demo owner already owns at least one workspace, this does nothing
-    and reports that existing workspace back instead of building a
-    second baseline on top of whatever the admin has since added by
-    hand through the UI — see seed_demo_data's own docstring for why
-    that check lives here rather than inside it. The first call creates
-    both demo accounts (see airi/demo_seed.py — neither has a real,
-    receivable email address) and a full baseline workspace: 5 projects
-    across every project type, saved tool runs, notes, and CoE
-    governance at both a Standard and a High risk tier."""
+    """Admin-only. Always rebuilds a fresh baseline: wipes any
+    workspace(s) the demo owner already owns first (same ON DELETE
+    CASCADE reach as DELETE /admin/demo/data — a no-op if there's
+    nothing to wipe yet) and then seeds a brand-new one.
+
+    This used to reuse an existing demo workspace instead of rebuilding
+    it, specifically so a second click wouldn't clobber anything the
+    admin had since added by hand through the UI. In practice that made
+    "Seed demo data" silently stop doing anything useful the moment it
+    had run once — a later click just kept returning the same
+    increasingly-stale workspace, including after the *seed_demo_data
+    code itself* changed, which is confusing in exactly the way this
+    button exists to avoid. Rebuilding every time is the simpler,
+    more honest behavior for a button whose whole job is "give me a
+    clean demo to poke at" — anyone building on top of the demo data for
+    real should treat it the way the panel's own copy already says to:
+    fine to add to, but not protected from a later reseed.
+
+    The demo accounts themselves (the `users` rows) are never touched
+    here, only their workspace(s) — same "keep accounts" semantics as
+    DELETE /admin/demo/data, so this never needs to re-mint the member's
+    login identity, just its access code (returned fresh every call —
+    there is no more "member_access_code: null" case)."""
     _require_admin(authorization)
     secret = _get_auth_secret()
     try:
-        existing_owner = db.get_demo_owner()
-        if existing_owner is not None:
-            owned = [w for w in db.list_workspaces(existing_owner["id"]) if w.get("role") == "admin"]
-            if owned:
-                return {
-                    "created": False,
-                    "workspace_id": owned[0]["id"],
-                    "workspace_title": owned[0]["title"],
-                    "owner_email": DEMO_OWNER_EMAIL,
-                    "member_email": DEMO_MEMBER_EMAIL,
-                    "member_access_code": None,
-                }
+        db.delete_demo_workspaces()
         summary = seed_demo_data(secret)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
