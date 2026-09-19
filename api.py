@@ -185,20 +185,18 @@ def _require_project_admin(project_id: int, user_id: int) -> Tuple[dict, dict]:
     return proj, workspace
 
 
-def _validate_coe_link(workspace_id: int, project_type: str, coe_linked_project_id: Optional[int]) -> None:
-    """ws.validate_project_fields already confirmed coe_linked_project_id
-    is present (and int-shaped) for a coe_initiative, and None for every
-    other type — this is the DB-backed half it can't do itself: the id
-    has to actually name a project in the *same* workspace, and can't be
-    a coe_initiative itself (an initiative governs an idea, not another
-    initiative)."""
-    if project_type != "coe_initiative":
-        return
-    linked = db.get_project(coe_linked_project_id)
-    if linked is None or linked["workspace_id"] != workspace_id:
-        raise HTTPException(status_code=400, detail="Linked project not found in this workspace.")
-    if linked["project_type"] == "coe_initiative":
-        raise HTTPException(status_code=400, detail="A CoE initiative can't govern another CoE initiative.")
+def _require_coe_governance_enabled(workspace: dict) -> None:
+    """Gate for the 3 CoE write endpoints (coe-risk/coe-roles/coe-phases):
+    the switch lives on the workspace (see ws: "projects: CoE
+    governance"), so a project in a workspace that never turned it on
+    can't accumulate governance data behind that decision — including
+    via a direct API call, not just through the UI, which already hides
+    the Governance tab in that case."""
+    if not workspace.get("coe_governance_enabled"):
+        raise HTTPException(
+            status_code=400,
+            detail="CoE governance isn't enabled for this workspace — turn it on in workspace settings first.",
+        )
 
 
 def _require_app_key_confirmed(user_id: int, submitted_app_key: Optional[str]) -> None:
@@ -413,6 +411,7 @@ class WorkspaceBody(BaseModel):
     title: str = ""
     target: str = ""
     description: str = ""
+    coe_governance_enabled: bool = False
 
 
 class WorkspaceMemberBody(BaseModel):
@@ -424,7 +423,6 @@ class ProjectBody(BaseModel):
     description: str = ""
     tech_stack: Dict[str, str] = Field(default_factory=dict)
     project_type: str = ws.DEFAULT_PROJECT_TYPE
-    coe_linked_project_id: Optional[int] = None
 
 
 class NoteBody(BaseModel):
@@ -870,11 +868,11 @@ def list_workspaces(authorization: Optional[str] = Header(default=None)):
 def create_workspace(body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
     user_id = _require_user_id(authorization)
     try:
-        title, target, description = ws.validate_workspace_fields(body.model_dump())
+        title, target, description, coe_governance_enabled = ws.validate_workspace_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:
-        workspace = db.create_workspace(user_id, title, target, description)
+        workspace = db.create_workspace(user_id, title, target, description, coe_governance_enabled)
     except db.DatabaseNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return _workspace_detail(workspace, "admin")  # whoever creates a workspace is its admin
@@ -889,16 +887,17 @@ def get_workspace(workspace_id: int, authorization: Optional[str] = Header(defau
 
 @app.put("/workspaces/{workspace_id}")
 def update_workspace(workspace_id: int, body: WorkspaceBody, authorization: Optional[str] = Header(default=None)):
-    """Editing a workspace's basic details (title/target/description) is
-    admin-only — a team member can work inside a workspace but can't
-    rename it or change what it's for."""
+    """Editing a workspace's basic details (title/target/description,
+    plus the CoE governance switch) is admin-only — a team member can
+    work inside a workspace but can't rename it, change what it's for,
+    or turn governance on/off for everyone."""
     user_id = _require_user_id(authorization)
     _require_workspace_admin(workspace_id, user_id)
     try:
-        title, target, description = ws.validate_workspace_fields(body.model_dump())
+        title, target, description, coe_governance_enabled = ws.validate_workspace_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    workspace = db.update_workspace(workspace_id, title, target, description)
+    workspace = db.update_workspace(workspace_id, title, target, description, coe_governance_enabled)
     return _workspace_detail(workspace, "admin")
 
 
@@ -1042,14 +1041,10 @@ def create_project(workspace_id: int, body: ProjectBody, authorization: Optional
     user_id = _require_user_id(authorization)
     _require_workspace_admin(workspace_id, user_id)
     try:
-        title, description, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _validate_coe_link(workspace_id, project_type, coe_linked_project_id)
-    return {
-        **db.create_project(workspace_id, title, description, tech_stack, project_type, coe_linked_project_id),
-        "role": "admin",
-    }
+    return {**db.create_project(workspace_id, title, description, tech_stack, project_type), "role": "admin"}
 
 
 @app.get("/projects/{project_id}")
@@ -1065,16 +1060,12 @@ def update_project(project_id: int, body: ProjectBody, authorization: Optional[s
     type, or change its tech stack, only work inside it (run tools, add
     notes)."""
     user_id = _require_user_id(authorization)
-    proj, _workspace = _require_project_admin(project_id, user_id)
+    _require_project_admin(project_id, user_id)
     try:
-        title, description, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(body.model_dump())
+        title, description, tech_stack, project_type = ws.validate_project_fields(body.model_dump())
     except ws.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _validate_coe_link(proj["workspace_id"], project_type, coe_linked_project_id)
-    return {
-        **db.update_project(project_id, title, description, tech_stack, project_type, coe_linked_project_id),
-        "role": "admin",
-    }
+    return {**db.update_project(project_id, title, description, tech_stack, project_type), "role": "admin"}
 
 
 @app.delete("/projects/{project_id}")
@@ -1087,8 +1078,8 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
     return {"deleted": True}
 
 
-# --- CoE governance (Phase 6a — a `coe_initiative` project's risk tier, ---
-# --- 6 gates, and 3 accountable roles; see airi/workspaces.py) ---
+# --- CoE governance (a project's risk tier, 6 gates, and 3 accountable ---
+# --- roles when the workspace has it turned on; see airi/workspaces.py) ---
 #
 # Deliberately open to any active workspace member, not admin-only, for
 # the risk form and gate updates — same level as notes/tool runs
@@ -1096,7 +1087,9 @@ def delete_project(project_id: int, body: AppKeyConfirmBody, authorization: Opti
 # use" is that whoever is actually doing the work can answer the gate's
 # question without needing the workspace admin to do it for them. Role
 # *assignment* (who holds business/technical/governance owner) stays
-# admin-only, same bucket as changing a project's title or type.
+# admin-only, same bucket as changing a project's title or type. All 3
+# writes 400 via _require_coe_governance_enabled if the workspace switch
+# is off — see ws: "projects: CoE governance".
 
 
 @app.get("/projects/coe-catalog")
@@ -1120,7 +1113,8 @@ def set_project_coe_risk(project_id: int, body: CoeRiskBody, authorization: Opti
     recomputing the tier is meant to be cheap and frequent (see "tier is
     not fixed at intake" in the plan doc), not a one-time admin action."""
     user_id = _require_user_id(authorization)
-    project_row, _workspace, _role = _get_accessible_project(project_id, user_id)
+    project_row, workspace, _role = _get_accessible_project(project_id, user_id)
+    _require_coe_governance_enabled(workspace)
     try:
         risk_factors = ws.validate_risk_answers(body.risk_factors)
     except ws.WorkspaceError as exc:
@@ -1140,7 +1134,8 @@ def set_project_coe_risk(project_id: int, body: CoeRiskBody, authorization: Opti
 def set_project_coe_roles(project_id: int, body: CoeRolesBody, authorization: Optional[str] = Header(default=None)):
     """Admin-only — same bucket as update_project."""
     user_id = _require_user_id(authorization)
-    _require_project_admin(project_id, user_id)
+    _proj, workspace = _require_project_admin(project_id, user_id)
+    _require_coe_governance_enabled(workspace)
     try:
         coe_roles = ws.validate_coe_roles(body.model_dump())
     except ws.WorkspaceError as exc:
@@ -1170,6 +1165,7 @@ def set_project_coe_gate(project_id: int, gate_key: str, body: CoeGateBody, auth
     record."""
     user_id = _require_user_id(authorization)
     project_row, workspace, _role = _get_accessible_project(project_id, user_id)
+    _require_coe_governance_enabled(workspace)
     try:
         gate_key, status, note = ws.validate_gate_update(gate_key, body.status, body.note)
     except ws.WorkspaceError as exc:

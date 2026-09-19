@@ -11,9 +11,9 @@ consolidated PDF report; Phase 4 added a cross-project comparison tab
 with its own PDF report, plus per-saved-run PDF downloads; Phase 5
 gave a workspace's team members their own real, role-scoped access
 instead of just an email notification; Phase 6 (this delivery — see
-"CoE Governance" below) adds a 4th project type for running an AI
-initiative through a risk-tiered governance model. No further phases
-are planned as of this delivery.
+"CoE Governance" below) adds a workspace-wide switch that runs every
+project in that workspace through a risk-tiered governance model. No
+further phases are planned as of this delivery.
 
 Like Exact mode, this entire feature requires a signed-in session — a
 workspace's admin signs in with email + OTP (see
@@ -473,51 +473,65 @@ members" above — Phase 5 changed their behavior, not their shape.)
 
 ## CoE Governance (Phase 6)
 
-A 4th `project_type`, `coe_initiative`, for running an AI initiative
-through a lightweight, risk-tiered governance model instead of a
-generic checklist — designed to need **zero setup** for a low-risk
-initiative and to get genuinely hard to bypass for a high-risk one.
-`sql/008_coe_governance.sql` adds five columns to `projects`
-(`risk_tier`, `risk_factors`, `risk_explanation`, `coe_roles`,
-`coe_phase_state` — all unused/NULL for the other three project types,
-same convention as `tech_stack`) plus one new append-only table,
-`coe_control_events`, for the decision ledger; `sql/009_coe_linked_project.sql`
-adds a 6th column, `coe_linked_project_id` (see "Governing an existing
-idea" below). The catalogs themselves (risk factors, gates, roles) are
-server-defined Python constants in `airi/workspaces.py`, not new
-tables — same pattern as `TECH_STACK_CATEGORIES` — served
-unauthenticated via `GET /projects/coe-catalog` so the frontend never
-hardcodes them.
+A lightweight, risk-tiered governance model an initiative can run
+through instead of a generic checklist — designed to need **zero
+setup** for a low-risk project and to get genuinely hard to bypass for
+a high-risk one. It's a **workspace-wide switch**
+(`coe_governance_enabled` on the workspace, toggled from the workspace
+panel — see "The workspace-level switch" below), not a project type or
+a per-project opt-in: whoever can create a project is already the
+workspace admin (see "Team-member access" above), so "does this
+workspace do CoE governance" is naturally a workspace decision. With
+the switch off, every project works exactly as it did before this
+feature existed; with it on, **every** project in that workspace —
+`api_request`, `license_request`, or `sdlc_request` alike — carries a
+risk tier, 6 gates, accountable roles, and a decision ledger.
 
-### Governing an existing idea, not capturing a new one
+This went through two earlier shapes during development, both
+superseded: a 4th `project_type` called `coe_initiative` (`sql/008`),
+then a `coe_linked_project_id` column so that initiative could point
+at an existing project (`sql/009`). `sql/010_coe_workspace_toggle.sql`
+replaces both with the workspace switch — it drops `coe_initiative`
+from the `project_type` check constraint and drops the now-pointless
+`coe_linked_project_id` column, while *keeping* the five columns
+`sql/008` added to `projects` (`risk_tier`, `risk_factors`,
+`risk_explanation`, `coe_roles`, `coe_phase_state`) and the
+`coe_control_events` ledger table, since those apply to any project
+type once the switch is on. The catalogs themselves (risk factors,
+gates, roles) are server-defined Python constants in
+`airi/workspaces.py`, not new tables — same pattern as
+`TECH_STACK_CATEGORIES` — served unauthenticated via `GET
+/projects/coe-catalog` so the frontend never hardcodes them.
 
-A `coe_initiative` doesn't have its own tech stack or notes-worthy
-"idea" — it governs one that's already been captured as an
-`api_request`/`license_request`/`sdlc_request` project in the same
-workspace, via `coe_linked_project_id` (nullable, `ON DELETE SET NULL`
-so a later deletion of the governed project doesn't take the
-initiative's ledger down with it). `ws.validate_project_fields`
-requires it for a `coe_initiative` and forces it to `None` for every
-other type; `api.py`'s `_validate_coe_link` does the DB-backed half
-that module can't (the id has to name a project in the *same*
-workspace, and can't itself be a `coe_initiative` — an initiative
-governs an idea, not another initiative). The "New project" form only
-shows the picker once `project_type = coe_initiative` is selected, and
-only lists eligible projects — if the workspace has none yet, it says
-so instead of letting the initiative be created ownerless. The
-Governance tab always shows which project it's governing at the top.
+### The workspace-level switch
+
+`coe_governance_enabled` is a plain boolean on `workspaces`, edited the
+same full-replace way as title/target/description (`ws.validate_workspace_fields`
+returns it as a 4th value; the workspace panel's "CoE governance"
+toggle autosaves it the same way those fields do). Only the workspace
+admin can flip it (`PUT /workspaces/{id}` is already admin-gated) — a
+team member can work inside whatever projects that decision produces,
+but doesn't make the decision itself. `api.py`'s
+`_require_coe_governance_enabled` guards all 3 CoE *write* endpoints
+(coe-risk, coe-roles, coe-phases) with a 400 if the switch is off, so
+governance data can't be set behind the workspace's back even via a
+direct API call — the frontend also simply doesn't render the
+Governance tab in that case, but the backend doesn't rely on that
+alone. Turning the switch off again doesn't delete anything already
+recorded (risk tier, gate state, ledger) — it just stops surfacing it,
+so turning it back on picks up exactly where it left off.
 
 ### Risk tiering: worst-factor-wins
 
-A new `coe_initiative` project shows nothing but a 4-question risk
-quiz (`RISK_FACTORS` in `airi/workspaces.py`: Data, Autonomy,
-Exposure, Reversibility) until it's answered — answering it
+Once governance is on for a workspace, a project shows nothing but a
+4-question risk quiz (`RISK_FACTORS` in `airi/workspaces.py`: Data,
+Autonomy, Exposure, Reversibility) until it's answered — answering it
 immediately unlocks everything else. `compute_risk_tier` takes the
 **max** score across the 4 answers, not an average: one severely-
-scored factor is enough to make the whole initiative High, the same
-way a single failed safety check outweighs three passing ones. That
-also makes the tier self-explaining — the stored `risk_explanation`
-always names the one factor that caused it (e.g. *"High, because of
+scored factor is enough to make the whole project High, the same way a
+single failed safety check outweighs three passing ones. That also
+makes the tier self-explaining — the stored `risk_explanation` always
+names the one factor that caused it (e.g. *"High, because of
 autonomy: acts on its own (sends, changes, spends)."*), so a tier is
 never a bare label. The quiz can be retaken any time; each answer
 overwrites the last (full-replace, like every other settings field in
@@ -570,12 +584,12 @@ renders it as a collapsed "History" section, reusing the
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /workspaces/{id}/projects` / `PUT /projects/{id}` | Extended with `coe_linked_project_id`: required (and DB-validated via `_validate_coe_link`) when `project_type = "coe_initiative"`, ignored otherwise. `400`s with "A CoE initiative governs an existing project..." if missing, or "Linked project not found in this workspace." / "A CoE initiative can't govern another CoE initiative." if invalid. |
+| `POST /workspaces` / `PUT /workspaces/{id}` | Extended with `coe_governance_enabled` (bool, default `false`). Admin-only on the `PUT`, same bucket as title/target/description. |
 | `GET /projects/coe-catalog` | Unauthenticated. Returns `RISK_FACTORS`, `COE_GATES`, `ACCOUNTABLE_ROLES`, `ENFORCEMENT_LOOKUP` so the frontend never hardcodes them. |
-| `PUT /projects/{id}/coe-risk` | Body: one answer per `RISK_FACTORS` key. Computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
-| `PUT /projects/{id}/coe-roles` | Admin-only. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
-| `PUT /projects/{id}/coe-phases/{gate_key}` | Body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
-| `GET /projects/{id}/coe-ledger` | All `coe_control_events` for the project, newest-first. |
+| `PUT /projects/{id}/coe-risk` | `400`s via `_require_coe_governance_enabled` if the workspace switch is off. Otherwise, body: one answer per `RISK_FACTORS` key — computes and stores `risk_tier`/`risk_explanation`, appends a `risk_set` ledger event. |
+| `PUT /projects/{id}/coe-roles` | Admin-only, and 400s if the switch is off. Body: `{role_key: user_id or null}` for each `ACCOUNTABLE_ROLES` key. Full-replace. |
+| `PUT /projects/{id}/coe-phases/{gate_key}` | 400s if the switch is off. Otherwise body: `{"status", "note"}`. `403`s if `status="cleared"` at Mandatory enforcement and the caller isn't the resolved accountable user for that gate; `400`s if `status="flagged"` with no note. Appends one `gate_status_changed` ledger event regardless of outcome. |
+| `GET /projects/{id}/coe-ledger` | All `coe_control_events` for the project, newest-first. Not gated by the switch — reading a project's (possibly empty) history is harmless either way. |
 
 ## What's next
 

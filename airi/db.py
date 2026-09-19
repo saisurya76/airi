@@ -228,18 +228,18 @@ def set_app_key_hash(user_id: int, app_key_hash: str) -> None:
 
 # ---------- workspaces ----------
 
-_WORKSPACE_FIELDS = "id, owner_user_id, title, target, description, created_at, updated_at"
+_WORKSPACE_FIELDS = "id, owner_user_id, title, target, description, coe_governance_enabled, created_at, updated_at"
 
 
-def create_workspace(owner_user_id: int, title: str, target: str, description: str) -> dict:
+def create_workspace(owner_user_id: int, title: str, target: str, description: str, coe_governance_enabled: bool = False) -> dict:
     with _cursor() as cur:
         cur.execute(
             f"""
-            INSERT INTO workspaces (owner_user_id, title, target, description)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO workspaces (owner_user_id, title, target, description, coe_governance_enabled)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING {_WORKSPACE_FIELDS}
             """,
-            (owner_user_id, title, target, description),
+            (owner_user_id, title, target, description, coe_governance_enabled),
         )
         return cur.fetchone()
 
@@ -281,15 +281,16 @@ def get_workspace(workspace_id: int) -> Optional[dict]:
         return cur.fetchone()
 
 
-def update_workspace(workspace_id: int, title: str, target: str, description: str) -> Optional[dict]:
+def update_workspace(workspace_id: int, title: str, target: str, description: str, coe_governance_enabled: bool = False) -> Optional[dict]:
     with _cursor() as cur:
         cur.execute(
             f"""
-            UPDATE workspaces SET title = %s, target = %s, description = %s, updated_at = now()
+            UPDATE workspaces SET title = %s, target = %s, description = %s,
+                coe_governance_enabled = %s, updated_at = now()
             WHERE id = %s
             RETURNING {_WORKSPACE_FIELDS}
             """,
-            (title, target, description, workspace_id),
+            (title, target, description, coe_governance_enabled, workspace_id),
         )
         return cur.fetchone()
 
@@ -434,22 +435,19 @@ def get_active_memberships_by_email(email: str) -> List[dict]:
 _PROJECT_FIELDS = (
     "id, workspace_id, title, description, tech_stack, project_type, "
     "risk_tier, risk_factors, risk_explanation, coe_roles, coe_phase_state, "
-    "coe_linked_project_id, created_at, updated_at"
+    "created_at, updated_at"
 )
 
 
-def create_project(
-    workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str,
-    coe_linked_project_id: Optional[int] = None,
-) -> dict:
+def create_project(workspace_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str) -> dict:
     with _cursor() as cur:
         cur.execute(
             f"""
-            INSERT INTO projects (workspace_id, title, description, tech_stack, project_type, coe_linked_project_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO projects (workspace_id, title, description, tech_stack, project_type)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING {_PROJECT_FIELDS}
             """,
-            (workspace_id, title, description, Json(tech_stack), project_type, coe_linked_project_id),
+            (workspace_id, title, description, Json(tech_stack), project_type),
         )
         return cur.fetchone()
 
@@ -469,19 +467,15 @@ def get_project(project_id: int) -> Optional[dict]:
         return cur.fetchone()
 
 
-def update_project(
-    project_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str,
-    coe_linked_project_id: Optional[int] = None,
-) -> Optional[dict]:
+def update_project(project_id: int, title: str, description: str, tech_stack: Dict[str, Any], project_type: str) -> Optional[dict]:
     with _cursor() as cur:
         cur.execute(
             f"""
-            UPDATE projects SET title = %s, description = %s, tech_stack = %s, project_type = %s,
-                coe_linked_project_id = %s, updated_at = now()
+            UPDATE projects SET title = %s, description = %s, tech_stack = %s, project_type = %s, updated_at = now()
             WHERE id = %s
             RETURNING {_PROJECT_FIELDS}
             """,
-            (title, description, Json(tech_stack), project_type, coe_linked_project_id, project_id),
+            (title, description, Json(tech_stack), project_type, project_id),
         )
         return cur.fetchone()
 

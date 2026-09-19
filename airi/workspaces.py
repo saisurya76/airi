@@ -72,12 +72,18 @@ def verify_app_key(user_id: int, app_key: str, pepper: str, expected_hash: str) 
 
 # ---------- workspaces ----------
 
-def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str]:
-    """Returns (title, target, description), all trimmed. Raises
-    WorkspaceError on the first problem found."""
+def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str, bool]:
+    """Returns (title, target, description, coe_governance_enabled), the
+    first three trimmed. Raises WorkspaceError on the first problem
+    found. coe_governance_enabled is a plain workspace-wide switch (see
+    "projects: CoE governance" below) — nothing to validate beyond
+    coercing to bool, same full-replace convention as every other
+    workspace/admin setting in this codebase (the form always submits
+    the whole state, so there's no partial-update logic to get wrong)."""
     title = (data.get("title") or "").strip()
     target = (data.get("target") or "").strip()
     description = (data.get("description") or "").strip()
+    coe_governance_enabled = bool(data.get("coe_governance_enabled"))
 
     if not title:
         raise WorkspaceError("Workspace title is required.")
@@ -87,7 +93,7 @@ def validate_workspace_fields(data: Dict[str, Any]) -> Tuple[str, str, str]:
         raise WorkspaceError(f"Workspace target is too long (max {TARGET_MAX_CHARS} characters).")
     if len(description) > DESCRIPTION_MAX_CHARS:
         raise WorkspaceError(f"Workspace description is too long (max {DESCRIPTION_MAX_CHARS} characters).")
-    return title, target, description
+    return title, target, description, coe_governance_enabled
 
 
 def normalize_member_email(email: str) -> str:
@@ -160,7 +166,7 @@ def validate_tech_stack(data: Dict[str, Any], require_full: bool = True) -> Dict
 
 # ---------- projects: type ----------
 #
-# Every project is one of four types. "api_request" is the original
+# Every project is one of three types. "api_request" is the original
 # (and, until this field existed, only) kind — a project whose saved
 # runs come from AIRI's four API-traffic tools (Standard, Exact, Traffic
 # projection, Load-test report). "license_request" and "sdlc_request"
@@ -168,17 +174,19 @@ def validate_tech_stack(data: Dict[str, Any], require_full: bool = True) -> Dict
 # frontend/sdlc-wizard.html) — a project of either kind is for
 # organizing that request and its notes, not for running the
 # API-traffic tools, which don't apply to a per-seat license or a
-# dev-tool seat/usage request. "coe_initiative" doesn't capture a new
-# idea of its own — it governs one that's already been captured as one
-# of the other three types (see coe_linked_project_id below), which is
-# why it needs an existing project to point at rather than a tech stack
-# of its own.
+# dev-tool seat/usage request.
+#
+# CoE governance (see below) used to be a 4th type, "coe_initiative",
+# that linked back to one of these three. It's now a workspace-wide
+# switch instead (`coe_governance_enabled` on the workspace) — when on,
+# EVERY project in that workspace, of any of these three types, carries
+# the risk tier/gates/roles/ledger; there's no separate governance
+# project to create or link.
 
 PROJECT_TYPES = {
     "api_request": {"label": "API request"},
     "license_request": {"label": "License request"},
     "sdlc_request": {"label": "SDLC tool request"},
-    "coe_initiative": {"label": "CoE initiative"},
 }
 
 DEFAULT_PROJECT_TYPE = "api_request"
@@ -194,19 +202,9 @@ def validate_project_type(value: Any) -> str:
     return value
 
 
-def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], str, Optional[int]]:
-    """Returns (title, description, tech_stack, project_type,
-    coe_linked_project_id). Raises WorkspaceError on the first problem
-    found.
-
-    coe_linked_project_id is only meaningful for project_type ==
-    "coe_initiative" — required there (a CoE initiative governs an
-    existing idea, it doesn't capture a new one), forced to None for
-    every other type regardless of what was submitted. This module has
-    no DB access, so it can only check that the id is *present and
-    shaped like* an id; the caller (api.py) is the one that confirms it
-    actually names a project in the same workspace that isn't itself a
-    coe_initiative, and turns a failure there into a 400 the same way."""
+def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, str], str]:
+    """Returns (title, description, tech_stack, project_type). Raises
+    WorkspaceError on the first problem found."""
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
 
@@ -219,31 +217,29 @@ def validate_project_fields(data: Dict[str, Any]) -> Tuple[str, str, Dict[str, s
 
     project_type = validate_project_type(data.get("project_type"))
     tech_stack = validate_tech_stack(data.get("tech_stack") or {}, require_full=(project_type == "api_request"))
-
-    coe_linked_project_id: Optional[int] = None
-    if project_type == "coe_initiative":
-        raw = data.get("coe_linked_project_id")
-        if not raw:
-            raise WorkspaceError(
-                "A CoE initiative governs an existing project — create an API/License/SDLC "
-                "request project first, then link it here."
-            )
-        try:
-            coe_linked_project_id = int(raw)
-        except (TypeError, ValueError):
-            raise WorkspaceError("coe_linked_project_id must be a project id.")
-
-    return title, description, tech_stack, project_type, coe_linked_project_id
+    return title, description, tech_stack, project_type
 
 
 # ---------- projects: CoE governance ----------
 #
 # The risk-tiered model from the "CoE Phases -> AIRI Workspaces Projects"
-# plan doc, built as a `coe_initiative` project's data: one risk tier
-# (computed from 4 factors, worst-factor-wins, never averaged), 3
-# accountable roles (not a 7-column enterprise RACI), and 6 gates (not
-# 18 checklist steps) — designed to need almost no setup for a low-risk
-# initiative and to get genuinely hard to bypass for a high-risk one.
+# plan doc: one risk tier (computed from 4 factors, worst-factor-wins,
+# never averaged), 3 accountable roles (not a 7-column enterprise RACI),
+# and 6 gates (not 18 checklist steps) — designed to need almost no
+# setup for a low-risk initiative and to get genuinely hard to bypass
+# for a high-risk one.
+#
+# It's a workspace-wide switch (`coe_governance_enabled` on the
+# workspace, see validate_workspace_fields), not a project type or a
+# per-project opt-in: whoever can create a project is already the
+# workspace admin, so "does this workspace do CoE governance" is a
+# workspace-level decision. With the switch off, a project's
+# risk_tier/coe_roles/coe_phase_state just stay at their defaults and
+# none of this ever surfaces — the process is exactly what it was
+# before this feature existed. api.py's three write endpoints
+# (coe-risk, coe-roles, coe-phases) 400 if the switch is off, so the
+# data can't be set behind the workspace's back even by a direct API
+# call.
 #
 # Identity enforcement: clearing a Mandatory gate is restricted to
 # whoever resolve_coe_roles() names for that gate's accountable_role
@@ -484,10 +480,10 @@ def validate_coe_roles(data: Dict[str, Any]) -> Dict[str, Optional[int]]:
 
 
 def resolve_coe_roles(coe_roles: Dict[str, Any], workspace_admin_user_id: int) -> Dict[str, int]:
-    """A brand-new coe_initiative needs zero setup: any role nobody has
-    explicitly assigned defaults to the workspace admin, so Guide/Ledger/
-    Gate all work immediately without an admin having to fill in a form
-    first."""
+    """A workspace that just turned CoE governance on needs zero role
+    setup: any role nobody has explicitly assigned defaults to the
+    workspace admin, so Guide/Ledger/Gate all work immediately without
+    an admin having to fill in a form first."""
     return {
         role_key: (coe_roles.get(role_key) or workspace_admin_user_id)
         for role_key in ACCOUNTABLE_ROLES

@@ -52,9 +52,18 @@ def test_verify_app_key_rejects_malformed_without_raising():
 # ---------- workspace fields ----------
 
 def test_validate_workspace_fields_trims_and_requires_title():
-    title, target, desc = ws.validate_workspace_fields({"title": "  My WS  ", "target": " t ", "description": " d "})
+    title, target, desc, coe_on = ws.validate_workspace_fields({"title": "  My WS  ", "target": " t ", "description": " d "})
     assert (title, target, desc) == ("My WS", "t", "d")
+    assert coe_on is False  # defaults off when not sent
     print("OK: validate_workspace_fields_trims_and_requires_title")
+
+
+def test_validate_workspace_fields_coe_governance_enabled_is_a_plain_bool():
+    _t, _tg, _d, coe_on = ws.validate_workspace_fields({"title": "ok", "coe_governance_enabled": True})
+    assert coe_on is True
+    _t, _tg, _d, coe_off = ws.validate_workspace_fields({"title": "ok", "coe_governance_enabled": False})
+    assert coe_off is False
+    print("OK: validate_workspace_fields_coe_governance_enabled_is_a_plain_bool")
 
 
 def test_validate_workspace_fields_rejects_missing_title():
@@ -163,14 +172,13 @@ def test_validate_tech_stack_rejects_non_string_value():
 # ---------- project fields ----------
 
 def test_validate_project_fields_happy_path():
-    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
+    title, desc, tech_stack, project_type = ws.validate_project_fields(
         {"title": " My Project ", "description": " d ", "tech_stack": _valid_tech_stack()}
     )
     assert title == "My Project"
     assert desc == "d"
     assert tech_stack["ai_model"] == "claude-3-5-sonnet"
     assert project_type == "api_request"  # default, since none was given
-    assert coe_linked_project_id is None
     print("OK: validate_project_fields_happy_path")
 
 
@@ -215,7 +223,7 @@ def test_validate_project_type_defaults_to_api_request():
 def test_validate_project_type_accepts_all_known_types():
     for key in ws.PROJECT_TYPES:
         assert ws.validate_project_type(key) == key
-    assert set(ws.PROJECT_TYPES.keys()) == {"api_request", "license_request", "sdlc_request", "coe_initiative"}
+    assert set(ws.PROJECT_TYPES.keys()) == {"api_request", "license_request", "sdlc_request"}
     print("OK: validate_project_type_accepts_all_known_types")
 
 
@@ -230,13 +238,12 @@ def test_validate_project_type_rejects_unknown_value():
 
 def test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack():
     for project_type in ("license_request", "sdlc_request"):
-        title, desc, tech_stack, returned_type, coe_linked_project_id = ws.validate_project_fields(
+        title, desc, tech_stack, returned_type = ws.validate_project_fields(
             {"title": "ok", "project_type": project_type}  # no tech_stack at all
         )
         assert returned_type == project_type
         assert tech_stack["ai_services"] == ""  # not required, and not supplied
         assert tech_stack["ai_model"] == ""
-        assert coe_linked_project_id is None
     print("OK: validate_project_fields_license_and_sdlc_types_dont_require_tech_stack")
 
 
@@ -247,49 +254,6 @@ def test_validate_project_fields_propagates_unknown_project_type():
     except ws.WorkspaceError as e:
         assert "unknown project type" in str(e).lower()
     print("OK: validate_project_fields_propagates_unknown_project_type")
-
-
-# ---------- CoE initiative <-> linked project ----------
-
-def test_validate_project_fields_coe_initiative_requires_link():
-    try:
-        ws.validate_project_fields({"title": "Governance for X", "project_type": "coe_initiative"})
-        assert False, "should have raised"
-    except ws.WorkspaceError as e:
-        assert "link" in str(e).lower()
-    print("OK: validate_project_fields_coe_initiative_requires_link")
-
-
-def test_validate_project_fields_coe_initiative_accepts_link():
-    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
-        {"title": "Governance for X", "project_type": "coe_initiative", "coe_linked_project_id": 42}
-    )
-    assert project_type == "coe_initiative"
-    assert coe_linked_project_id == 42
-    # not required to fill in the (inapplicable) tech stack for this type
-    assert tech_stack["ai_services"] == ""
-    print("OK: validate_project_fields_coe_initiative_accepts_link")
-
-
-def test_validate_project_fields_coe_initiative_rejects_non_numeric_link():
-    try:
-        ws.validate_project_fields(
-            {"title": "Governance for X", "project_type": "coe_initiative", "coe_linked_project_id": "not-a-number"}
-        )
-        assert False, "should have raised"
-    except ws.WorkspaceError as e:
-        assert "project id" in str(e).lower()
-    print("OK: validate_project_fields_coe_initiative_rejects_non_numeric_link")
-
-
-def test_validate_project_fields_ignores_link_for_non_coe_types():
-    # A link value submitted for a non-coe_initiative type is just
-    # discarded rather than erroring — it's meaningless there.
-    title, desc, tech_stack, project_type, coe_linked_project_id = ws.validate_project_fields(
-        {"title": "ok", "project_type": "api_request", "coe_linked_project_id": 99, "tech_stack": _valid_tech_stack()}
-    )
-    assert coe_linked_project_id is None
-    print("OK: validate_project_fields_ignores_link_for_non_coe_types")
 
 
 # ---------- CoE governance: risk tier ----------
@@ -455,6 +419,7 @@ if __name__ == "__main__":
     test_verify_app_key_roundtrip()
     test_verify_app_key_rejects_malformed_without_raising()
     test_validate_workspace_fields_trims_and_requires_title()
+    test_validate_workspace_fields_coe_governance_enabled_is_a_plain_bool()
     test_validate_workspace_fields_rejects_missing_title()
     test_validate_workspace_fields_rejects_oversized_values()
     test_normalize_member_email_lowercases_and_trims()
@@ -473,10 +438,6 @@ if __name__ == "__main__":
     test_validate_project_type_rejects_unknown_value()
     test_validate_project_fields_license_and_sdlc_types_dont_require_tech_stack()
     test_validate_project_fields_propagates_unknown_project_type()
-    test_validate_project_fields_coe_initiative_requires_link()
-    test_validate_project_fields_coe_initiative_accepts_link()
-    test_validate_project_fields_coe_initiative_rejects_non_numeric_link()
-    test_validate_project_fields_ignores_link_for_non_coe_types()
     test_validate_risk_answers_requires_all_four_factors()
     test_validate_risk_answers_rejects_unknown_value()
     test_compute_risk_tier_all_lowest_is_low()

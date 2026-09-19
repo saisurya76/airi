@@ -159,6 +159,21 @@
   .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .autosave-note { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .switch { position: relative; display: inline-block; width: 44px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background-color: #2a2f3a; border-radius: 999px; transition: 0.15s;
+  }
+  .switch .slider:before {
+    position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+    background-color: #e8e9ec; border-radius: 50%; transition: 0.15s;
+  }
+  .switch input:checked + .slider { background-color: var(--accent); }
+  .switch input:checked + .slider:before { transform: translateX(20px); }
+  .switch input:disabled + .slider { opacity: 0.5; cursor: default; }
+
   .member-row, .project-row {
     display: flex;
     align-items: center;
@@ -185,7 +200,6 @@
   .type-api_request { background: rgba(110,168,254,0.15); color: var(--accent); }
   .type-license_request { background: rgba(62,207,142,0.15); color: var(--safe); }
   .type-sdlc_request { background: rgba(242,184,75,0.15); color: var(--warning); }
-  .type-coe_initiative { background: rgba(155,126,242,0.15); color: #9b7ef2; }
   .project-type-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 2px; }
   .project-type-row label {
     display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
@@ -503,6 +517,16 @@
             <label for="wsDescriptionInput">Description</label>
             <textarea id="wsDescriptionInput"></textarea>
           </div>
+          <div class="toggle-row">
+            <div>
+              <div style="font-size:14px; color:var(--text); font-weight:600;">CoE governance</div>
+              <div class="sub" style="margin:2px 0 0; font-size:12px;">Off = projects work exactly as they do now. On = every project in this workspace gets a risk tier, 6 gates, accountable roles, and a decision ledger.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="wsCoeGovernanceToggle" />
+              <span class="slider"></span>
+            </label>
+          </div>
           <div id="wsAutosaveNote" class="autosave-note">Changes save automatically.</div>
           <div id="wsSaveError" class="error hidden"></div>
         </div>
@@ -543,7 +567,6 @@
               <label>Project type <span class="required-mark">*</span></label>
               <div class="project-type-row" id="newProjTypeRow"></div>
             </div>
-            <div id="newProjLinkField" class="hidden"></div>
             <div class="field">
               <label for="newProjTitle">Title <span class="required-mark">*</span></label>
               <input id="newProjTitle" placeholder="e.g. Support chatbot API" />
@@ -566,7 +589,9 @@
               and price the request itself in the dedicated wizard. Every project gets a Notes tab (a
               timestamped comment history). Once this workspace has 2+ API request projects, a
               "Project comparison" section appears above, comparing them side by side with its own
-              downloadable report.
+              downloadable report. Turn on <b>CoE governance</b> in the workspace panel above to add a
+              risk tier, 6 gates, and accountable roles to every project here — it's a workspace-wide
+              switch, not a project type.
             </div>
           </div>
           <div id="memberProjectNote" class="tab-note hidden">
@@ -634,7 +659,7 @@
   let techStackCategories = {};
   let projectTypes = {};
   let coeCatalog = { risk_factors: {}, risk_tiers: {}, gates: [], roles: {}, gate_statuses: [], enforcement_lookup: {} };
-  const PROJECT_TYPE_FALLBACK_ORDER = ["api_request", "license_request", "sdlc_request", "coe_initiative"];
+  const PROJECT_TYPE_FALLBACK_ORDER = ["api_request", "license_request", "sdlc_request"];
   const WIZARD_LINKS = {
     license_request: { href: "license-wizard.html", label: "License request wizard" },
     sdlc_request: { href: "sdlc-wizard.html", label: "SDLC tool request wizard" },
@@ -1045,6 +1070,7 @@
   const wsTitleInput = document.getElementById("wsTitleInput");
   const wsTargetInput = document.getElementById("wsTargetInput");
   const wsDescriptionInput = document.getElementById("wsDescriptionInput");
+  const wsCoeGovernanceToggle = document.getElementById("wsCoeGovernanceToggle");
   const wsSaveError = document.getElementById("wsSaveError");
   let wsAutosaveTimer = null;
 
@@ -1053,6 +1079,7 @@
     wsTitleInput.value = currentWorkspace.title;
     wsTargetInput.value = currentWorkspace.target;
     wsDescriptionInput.value = currentWorkspace.description;
+    wsCoeGovernanceToggle.checked = !!currentWorkspace.coe_governance_enabled;
     wsSaveError.classList.add("hidden");
     applyWorkspaceRoleUi();
     renderMembers();
@@ -1068,11 +1095,13 @@
   // workspace/project identity (create/delete either, edit basic details)
   // or membership management — the backend enforces all of this with a
   // 403 regardless, this just keeps the UI from offering controls a
-  // member's every click would bounce off.
+  // member's every click would bounce off. CoE governance is one of
+  // those basic details: only the admin can flip the switch for
+  // everyone else in the workspace.
   function applyWorkspaceRoleUi() {
     const isAdmin = currentWorkspace.role === "admin";
     document.getElementById("deleteWsBtn").classList.toggle("hidden", !isAdmin);
-    [wsTitleInput, wsTargetInput, wsDescriptionInput].forEach((el) => { el.disabled = !isAdmin; });
+    [wsTitleInput, wsTargetInput, wsDescriptionInput, wsCoeGovernanceToggle].forEach((el) => { el.disabled = !isAdmin; });
     document.getElementById("wsAutosaveNote").textContent = isAdmin
       ? "Changes save automatically."
       : "Only the workspace admin can edit these details.";
@@ -1090,14 +1119,23 @@
     if (!currentWorkspace) return;
     const title = wsTitleInput.value.trim();
     if (!title) return; // don't autosave an empty required title; user is mid-edit
+    const coeGovernanceChanged = wsCoeGovernanceToggle.checked !== !!currentWorkspace.coe_governance_enabled;
     try {
       const updated = await apiFetch(`/workspaces/${currentWorkspace.id}`, {
         method: "PUT",
-        body: JSON.stringify({ title, target: wsTargetInput.value.trim(), description: wsDescriptionInput.value.trim() }),
+        body: JSON.stringify({
+          title, target: wsTargetInput.value.trim(), description: wsDescriptionInput.value.trim(),
+          coe_governance_enabled: wsCoeGovernanceToggle.checked,
+        }),
       });
       currentWorkspace = { ...currentWorkspace, ...updated };
       wsSaveError.classList.add("hidden");
+      // Every project's tab bar depends on this switch (Governance tab
+      // shown or not) — re-render them so flipping it takes effect
+      // immediately instead of on the next reload.
+      if (coeGovernanceChanged) renderProjects();
     } catch (e) {
+      wsCoeGovernanceToggle.checked = !!currentWorkspace.coe_governance_enabled; // revert the optimistic UI flip
       wsSaveError.textContent = e.message;
       wsSaveError.classList.remove("hidden");
     }
@@ -1107,6 +1145,7 @@
     el.addEventListener("input", scheduleWsAutosave);
     el.addEventListener("blur", saveWorkspaceFields);
   });
+  wsCoeGovernanceToggle.addEventListener("change", saveWorkspaceFields);
 
   document.getElementById("deleteWsBtn").addEventListener("click", () => {
     if (!currentWorkspace) return;
@@ -1293,7 +1332,7 @@
     const meta = projectTypes[type];
     if (meta) return meta.label;
     // Fallback labels if /projects/project-types hasn't loaded yet.
-    return { api_request: "API request", license_request: "License request", sdlc_request: "SDLC tool request", coe_initiative: "CoE initiative" }[type] || type;
+    return { api_request: "API request", license_request: "License request", sdlc_request: "SDLC tool request" }[type] || type;
   }
 
   function projectTypeRadiosHtml(idPrefix, selected, disabled) {
@@ -1319,51 +1358,13 @@
       <a href="${link.href}" target="_blank" rel="noopener">Open the ${escapeHtml(link.label)} →</a>`;
   }
 
-  // A coe_initiative doesn't capture a new idea — it governs one that's
-  // already an api_request/license_request/sdlc_request project in this
-  // same workspace. excludeProjectId drops the project being edited out
-  // of its own candidate list (only relevant when editing an existing
-  // project, never for "New project").
-  function coeLinkCandidates(excludeProjectId) {
-    return (currentWorkspace.projects || []).filter(
-      (p) => (p.project_type || "api_request") !== "coe_initiative" && p.id !== excludeProjectId
-    );
-  }
-
-  function coeLinkFieldHtml(candidates, selectedId) {
-    if (!candidates.length) {
-      return `
-        <div class="field">
-          <label>Governs which project? <span class="required-mark">*</span></label>
-          <p class="sub" style="margin:4px 0 0;">This workspace doesn't have an API/License/SDLC request
-            project yet — create one first, then come back and add the CoE initiative to govern it.</p>
-        </div>
-      `;
-    }
-    return `
-      <div class="field">
-        <label>Governs which project? <span class="required-mark">*</span></label>
-        <select data-coe-link-select>
-          <option value="">Choose a project…</option>
-          ${candidates.map((p) => `
-            <option value="${p.id}"${p.id === selectedId ? " selected" : ""}>${escapeHtml(p.title)} — ${escapeHtml(projectTypeLabel(p.project_type || "api_request"))}</option>
-          `).join("")}
-        </select>
-      </div>
-    `;
-  }
-
-  function readCoeLinkedProjectId(linkFieldEl) {
-    const select = linkFieldEl && linkFieldEl.querySelector("[data-coe-link-select]");
-    return select && select.value ? Number(select.value) : null;
-  }
-
   // Wires a project-type radio row so picking a type toggles that same
-  // form's tech-stack grid (only "API request" needs it), the "governs
-  // which project" picker (only "CoE initiative" needs it), and, for the
+  // form's tech-stack grid (only "API request" needs it) and, for the
   // two demo-wizard types, shows the wizard note. Shared by the "New
-  // project" form and each project's "Details" edit form.
-  function wireProjectTypeRow(rowEl, techStackEl, wizardNoteEl, linkFieldEl, excludeProjectId, selectedLinkId) {
+  // project" form and each project's "Details" edit form. (CoE
+  // governance is a workspace-wide switch now, not a project type — see
+  // the toggle in the workspace panel — so it has nothing to wire here.)
+  function wireProjectTypeRow(rowEl, techStackEl, wizardNoteEl) {
     const applyForType = (type) => {
       rowEl.querySelectorAll("label").forEach((label) => {
         const input = label.querySelector("input[data-project-type-radio]");
@@ -1374,14 +1375,6 @@
         const note = wizardNoteHtml(type);
         wizardNoteEl.innerHTML = note;
         wizardNoteEl.classList.toggle("hidden", !note);
-      }
-      if (linkFieldEl) {
-        const isCoe = type === "coe_initiative";
-        linkFieldEl.classList.toggle("hidden", !isCoe);
-        if (isCoe && !linkFieldEl.dataset.rendered) {
-          linkFieldEl.dataset.rendered = "1";
-          linkFieldEl.innerHTML = coeLinkFieldHtml(coeLinkCandidates(excludeProjectId), selectedLinkId);
-        }
       }
     };
     rowEl.querySelectorAll("input[data-project-type-radio]").forEach((input) => {
@@ -1394,16 +1387,10 @@
   function renderNewProjectForm() {
     newProjTechStack.innerHTML = techStackFieldsHtml("new-proj", {});
     document.getElementById("newProjTypeRow").innerHTML = projectTypeRadiosHtml("new-proj", "api_request");
-    const linkFieldEl = document.getElementById("newProjLinkField");
-    linkFieldEl.innerHTML = "";
-    delete linkFieldEl.dataset.rendered;
     wireProjectTypeRow(
       document.getElementById("newProjTypeRow"),
       newProjTechStack,
-      document.getElementById("newProjWizardNote"),
-      linkFieldEl,
-      null,
-      null
+      document.getElementById("newProjWizardNote")
     );
   }
 
@@ -1419,61 +1406,60 @@
     const projects = currentWorkspace.projects || [];
     const isAdmin = currentWorkspace.role === "admin";
     projectsEmptyState.classList.toggle("hidden", projects.length > 0);
+    const coeOn = !!currentWorkspace.coe_governance_enabled;
     for (const p of projects) {
       const projectType = p.project_type || "api_request";
       const isApiProject = projectType === "api_request";
-      const isCoeInitiative = projectType === "coe_initiative";
       const row = document.createElement("div");
       row.className = "project-row";
       const chip = stackSummary(p.tech_stack);
-      const riskChip = isCoeInitiative && p.risk_tier
-        ? `<span class="stack-chip" style="color:${RISK_TIER_COLOR[p.risk_tier] || "var(--muted)"};">${escapeHtml((coeCatalog.risk_tiers[p.risk_tier] || {}).label || p.risk_tier)} risk</span>`
-        : "";
       row.innerHTML = `
         <div class="project-summary">
           <div>
             <b>${escapeHtml(p.title)}</b><span class="type-badge type-${projectType}">${escapeHtml(projectTypeLabel(projectType))}</span>
-            ${riskChip}
+            <span class="risk-chip-slot"></span>
             ${chip ? `<div class="stack-chip">${escapeHtml(chip)}</div>` : ""}
           </div>
           <span class="link-btn">Edit ▾</span>
         </div>
       `;
+      updateRiskChipSlot(row, p);
       const body = document.createElement("div");
       body.className = "project-body hidden";
       const idPrefix = `proj-${p.id}`;
-      // The 4 API-traffic tools (+ their Dashboard rollup) only apply to
-      // an "api_request" project; "coe_initiative" gets a Governance tab
-      // built right here (not a link out); the two older demo-wizard
-      // types get a single "Wizard" tab pointing at the dedicated page.
-      const toolTabsHtml = isApiProject ? `
+      // The 4 API-traffic tools (+ their Dashboard rollup) apply to an
+      // "api_request" project, the two older demo-wizard types get a
+      // single "Wizard" tab pointing at the dedicated page — and, on top
+      // of whichever of those a project already has, a "Governance" tab
+      // is appended whenever the workspace's CoE governance switch is on
+      // (see the toggle in the workspace panel), regardless of type.
+      const typeTabsHtml = isApiProject ? `
           <button type="button" class="proj-tab-btn" data-tab="analyze">Standard</button>
           <button type="button" class="proj-tab-btn" data-tab="exact">Exact</button>
           <button type="button" class="proj-tab-btn" data-tab="project">Traffic</button>
           <button type="button" class="proj-tab-btn" data-tab="report">Load Test</button>
           <button type="button" class="proj-tab-btn" data-tab="dashboard">Dashboard</button>
-        ` : isCoeInitiative ? `
-          <button type="button" class="proj-tab-btn" data-tab="governance">Governance</button>
         ` : `
           <button type="button" class="proj-tab-btn" data-tab="wizard">Wizard</button>
         `;
-      const toolPanelsHtml = isApiProject ? `
+      const typePanelsHtml = isApiProject ? `
         <div class="proj-tab-panel hidden" data-panel="analyze"></div>
         <div class="proj-tab-panel hidden" data-panel="exact"></div>
         <div class="proj-tab-panel hidden" data-panel="project"></div>
         <div class="proj-tab-panel hidden" data-panel="report"></div>
         <div class="proj-tab-panel hidden" data-panel="dashboard"></div>
-        ` : isCoeInitiative ? `
-        <div class="proj-tab-panel hidden" data-panel="governance"></div>
         ` : `
         <div class="proj-tab-panel hidden" data-panel="wizard">
           <div class="tab-note">${wizardNoteHtml(projectType)}</div>
         </div>
         `;
+      const governanceTabHtml = coeOn ? `<button type="button" class="proj-tab-btn" data-tab="governance">Governance</button>` : "";
+      const governancePanelHtml = coeOn ? `<div class="proj-tab-panel hidden" data-panel="governance"></div>` : "";
       body.innerHTML = `
         <div class="proj-tabs">
           <button type="button" class="proj-tab-btn active" data-tab="details">Details</button>
-          ${toolTabsHtml}
+          ${typeTabsHtml}
+          ${governanceTabHtml}
           <button type="button" class="proj-tab-btn" data-tab="notes">Notes</button>
           <button type="button" class="proj-tab-btn" data-tab="actions">Actions</button>
         </div>
@@ -1483,7 +1469,6 @@
             <div class="project-type-row" id="${idPrefix}-type-row"></div>
             ${!isApiProject ? `<div class="tab-note" style="margin-top:10px;">Switching back to <b>API request</b> will show the tech-stack fields below and the Standard/Exact/Traffic/Load-test tabs again — nothing already saved is deleted.</div>` : ""}
           </div>
-          <div id="${idPrefix}-link-field" class="hidden"></div>
           <div class="field">
             <label for="${idPrefix}-title">Title <span class="required-mark">*</span></label>
             <input id="${idPrefix}-title" value="${escapeHtml(p.title)}"${isAdmin ? "" : " disabled"} />
@@ -1501,7 +1486,8 @@
           <div class="error hidden save-project-error"></div>
           ` : `<p class="sub" style="margin-top:10px;">Only the workspace admin can edit or delete this project.</p>`}
         </div>
-        ${toolPanelsHtml}
+        ${typePanelsHtml}
+        ${governancePanelHtml}
         <div class="proj-tab-panel hidden" data-panel="notes"></div>
         <div class="proj-tab-panel hidden" data-panel="actions"></div>
       `;
@@ -1513,14 +1499,10 @@
 
       document.getElementById(`${idPrefix}-stack`).innerHTML = techStackFieldsHtml(idPrefix, p.tech_stack, !isAdmin);
       document.getElementById(`${idPrefix}-type-row`).innerHTML = projectTypeRadiosHtml(idPrefix, projectType, !isAdmin);
-      const linkFieldEl = document.getElementById(`${idPrefix}-link-field`);
       wireProjectTypeRow(
         document.getElementById(`${idPrefix}-type-row`),
         document.getElementById(`${idPrefix}-stack`),
-        null,
-        linkFieldEl,
-        p.id,
-        p.coe_linked_project_id
+        null
       );
 
       if (isAdmin) {
@@ -1532,7 +1514,6 @@
             description: document.getElementById(`${idPrefix}-description`).value.trim(),
             tech_stack: readTechStackFields(idPrefix),
             project_type: readProjectType(idPrefix),
-            coe_linked_project_id: readCoeLinkedProjectId(linkFieldEl),
           };
           try {
             const updated = await apiFetch(`/projects/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -1571,7 +1552,7 @@
               if (tab === "dashboard") renderDashboardPanel(p, panel);
               else if (tab === "notes") renderNotesPanel(p, panel);
               else if (tab === "actions") renderActionsPanel(p, panel);
-              else if (tab === "governance") renderGovernancePanel(p, panel, isAdmin);
+              else if (tab === "governance") renderGovernancePanel(p, panel, isAdmin, row);
               else renderToolPanel(tab, p, panel);
             }
           }
@@ -1590,7 +1571,6 @@
       description: document.getElementById("newProjDescription").value.trim(),
       tech_stack: readTechStackFields("new-proj"),
       project_type: readProjectType("new-proj"),
-      coe_linked_project_id: readCoeLinkedProjectId(document.getElementById("newProjLinkField")),
     };
     try {
       const project = await apiFetch(`/workspaces/${currentWorkspace.id}/projects`, { method: "POST", body: JSON.stringify(payload) });
@@ -1995,13 +1975,14 @@
     });
   }
 
-  // ---------- Governance tab (coe_initiative projects) ----------
+  // ---------- Governance tab (any project, when the workspace has CoE ----------
+  // ---------- governance turned on — see the toggle in the workspace panel) ----------
   //
-  // Breeze-first: a brand-new initiative shows just the 4-question risk
-  // form. Answering it once unlocks the 6 gates and the accountable-role
-  // row — nothing else to set up. All current state (risk_tier/
-  // risk_factors/risk_explanation/coe_roles/coe_phase_state) already
-  // rides on the project object itself (see airi/db.py:
+  // Breeze-first: a project shows just the 4-question risk form until
+  // it's answered. Answering it once unlocks the 6 gates and the
+  // accountable-role row — nothing else to set up. All current state
+  // (risk_tier/risk_factors/risk_explanation/coe_roles/coe_phase_state)
+  // already rides on the project object itself (see airi/db.py:
   // _PROJECT_FIELDS), so this panel never needs its own GET on open —
   // only the ledger (History, below) does, and only when expanded.
 
@@ -2219,25 +2200,29 @@
     });
   }
 
-  function governedProjectLineHtml(project) {
-    const linkedId = project.coe_linked_project_id;
-    if (!linkedId) return "";
-    const linked = (currentWorkspace.projects || []).find((p) => p.id === linkedId);
-    const label = linked
-      ? `${escapeHtml(linked.title)} <span class="type-badge type-${linked.project_type || "api_request"}">${escapeHtml(projectTypeLabel(linked.project_type || "api_request"))}</span>`
-      : `<i>a project that's since been deleted</i>`;
-    return `<p class="sub" style="margin:0 0 14px;">Governing: ${label}</p>`;
+  // The project row's summary line (outside this tab entirely) shows a
+  // risk chip once one's set — kept in its own named slot so answering
+  // or retaking the quiz can refresh just that chip without a full
+  // renderProjects() (which would collapse every expanded row, including
+  // the one the user is actively looking at).
+  function updateRiskChipSlot(rowEl, project) {
+    const slot = rowEl && rowEl.querySelector(".risk-chip-slot");
+    if (!slot) return;
+    const coeOn = !!currentWorkspace.coe_governance_enabled;
+    slot.innerHTML = (coeOn && project.risk_tier)
+      ? `<span class="stack-chip" style="color:${RISK_TIER_COLOR[project.risk_tier] || "var(--muted)"};">${escapeHtml((coeCatalog.risk_tiers[project.risk_tier] || {}).label || project.risk_tier)} risk</span>`
+      : "";
   }
 
-  function renderGovernancePanel(project, panelEl, isAdmin) {
+  function renderGovernancePanel(project, panelEl, isAdmin, rowEl) {
+    updateRiskChipSlot(rowEl, project);
     const idPrefix = `proj-${project.id}-risk`;
     if (!project.risk_tier) {
-      panelEl.innerHTML = governedProjectLineHtml(project) + riskFormHtml(idPrefix, project.risk_factors);
-      wireRiskForm(project, panelEl, idPrefix, () => renderGovernancePanel(project, panelEl, isAdmin));
+      panelEl.innerHTML = riskFormHtml(idPrefix, project.risk_factors);
+      wireRiskForm(project, panelEl, idPrefix, () => renderGovernancePanel(project, panelEl, isAdmin, rowEl));
       return;
     }
     panelEl.innerHTML = `
-      ${governedProjectLineHtml(project)}
       ${riskBannerHtml(project)}
       <h3 style="margin-top:18px;">The 6 gates</h3>
       ${gatesListHtml(project)}
@@ -2251,9 +2236,9 @@
       if (retakeDetail.dataset.rendered) return;
       retakeDetail.dataset.rendered = "1";
       retakeDetail.innerHTML = riskFormHtml(`${idPrefix}-retake`, project.risk_factors);
-      wireRiskForm(project, retakeDetail, `${idPrefix}-retake`, () => renderGovernancePanel(project, panelEl, isAdmin));
+      wireRiskForm(project, retakeDetail, `${idPrefix}-retake`, () => renderGovernancePanel(project, panelEl, isAdmin, rowEl));
     });
-    wireGates(project, panelEl, () => renderGovernancePanel(project, panelEl, isAdmin));
+    wireGates(project, panelEl, () => renderGovernancePanel(project, panelEl, isAdmin, rowEl));
     if (isAdmin) wireRoles(project, panelEl);
     wireLedger(project, panelEl);
   }
