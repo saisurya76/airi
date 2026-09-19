@@ -105,6 +105,7 @@ def test_admin_demo_and_users_routes_are_registered_and_password_gated():
         ("GET", "/admin/users"),
         ("POST", "/admin/demo/seed"),
         ("POST", "/admin/demo/login"),
+        ("POST", "/admin/demo/member-code"),
         ("POST", "/admin/demo/disable"),
         ("POST", "/admin/demo/enable"),
         ("DELETE", "/admin/demo/data"),
@@ -120,6 +121,8 @@ def test_admin_demo_and_users_routes_are_registered_and_password_gated():
     resp = client.get("/admin/users")
     assert resp.status_code in (401, 503), f"expected 401 or 503 with no admin token, got {resp.status_code}: {resp.text}"
     resp = client.post("/admin/demo/seed")
+    assert resp.status_code in (401, 503), f"expected 401 or 503 with no admin token, got {resp.status_code}: {resp.text}"
+    resp = client.post("/admin/demo/member-code")
     assert resp.status_code in (401, 503), f"expected 401 or 503 with no admin token, got {resp.status_code}: {resp.text}"
     print("OK: admin_demo_and_users_routes_are_registered_and_password_gated")
 

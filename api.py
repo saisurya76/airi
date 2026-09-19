@@ -2052,6 +2052,39 @@ def admin_demo_login(authorization: Optional[str] = Header(default=None)):
     return {"token": create_session_token(owner["email"], secret), "email": owner["email"]}
 
 
+@app.post("/admin/demo/member-code")
+def admin_regenerate_demo_member_code(authorization: Optional[str] = Header(default=None)):
+    """Admin-only convenience wrapper around the exact same path a real
+    workspace admin already has — POST
+    /workspaces/{id}/members/{member_id}/regenerate-code — just reachable
+    with the admin password alone, without having to open a demo owner
+    session and click through to Team members first. Exists because the
+    demo member's access code (see POST /admin/demo/seed) is only ever
+    shown once, same never-store convention as any real one, so there
+    was previously no way to get a working code again short of wiping
+    and reseeding the whole workspace. 400 if there's no demo workspace
+    or demo member yet — seed first."""
+    _require_admin(authorization)
+    try:
+        owner = db.get_demo_owner()
+        if owner is None:
+            raise HTTPException(status_code=400, detail="No demo data yet — seed it first.")
+        owned = [w for w in db.list_workspaces(owner["id"]) if w.get("role") == "admin"]
+        if not owned:
+            raise HTTPException(status_code=400, detail="No demo workspace yet — seed it first.")
+        workspace_id = owned[0]["id"]
+        members = db.list_workspace_members(workspace_id)
+    except db.DatabaseNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    member = next((m for m in members if m["email"] == DEMO_MEMBER_EMAIL), None)
+    if member is None:
+        raise HTTPException(status_code=400, detail="Demo team member not found in this workspace.")
+    pepper = _get_auth_secret()
+    code = generate_access_code()
+    updated = db.regenerate_workspace_member_code(workspace_id, member["id"], hash_code(DEMO_MEMBER_EMAIL, code, pepper))
+    return {**updated, "access_code": code}
+
+
 @app.post("/admin/demo/disable")
 def admin_disable_demo(authorization: Optional[str] = Header(default=None)):
     """Admin-only: blocks every demo login path at once, without

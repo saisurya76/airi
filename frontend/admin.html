@@ -510,7 +510,7 @@
 
     <div id="demoPanel" class="panel hidden">
       <div style="font-size:14px; color:var(--text); font-weight:600;">Demo data</div>
-      <p class="sub" style="margin:4px 0 0; font-size:12px;">One seeded workspace — 5 projects covering every project type, saved tool runs, notes, and CoE governance at two risk tiers — for browsing the app end to end or building on top of as a sandbox. Seeded rows are flagged internally so these actions never touch a real user's account.</p>
+      <p class="sub" style="margin:4px 0 0; font-size:12px;">One seeded workspace — 5 projects covering every project type, saved tool runs, notes, and CoE governance on for every project, all 6 gates filled in, spanning all 3 risk tiers — for browsing the app end to end or building on top of as a sandbox. Seeded rows are flagged internally so these actions never touch a real user's account.</p>
 
       <div class="btn-row">
         <button type="button" id="seedDemoBtn">Seed demo data</button>
@@ -524,12 +524,13 @@
       </div>
 
       <div id="demoSummary" class="code-box hidden">
-        <div>Owner: <span id="demoOwnerEmail" style="color:var(--text); font-weight:600;"></span></div>
-        <div style="margin-top:6px;">Team member: <span id="demoMemberEmail" style="color:var(--text); font-weight:600;"></span></div>
-        <div id="demoMemberCodeRow" class="hidden" style="margin-top:6px;">
+        <div>Owner: <span id="demoOwnerEmail" style="color:var(--text); font-weight:600;"></span> — no password needed, use "Open demo session" above.</div>
+        <div style="margin-top:6px;">Team member: <span id="demoMemberEmail" style="color:var(--text); font-weight:600;"></span> — signs in on the sign-in screen's "I have an access code" option, with this email and the code below.</div>
+        <div id="demoMemberCodeRow" class="hidden" style="margin-top:10px;">
           Access code: <span id="demoMemberCode" class="code-value"></span>
-          <div class="field-hint" style="margin-top:2px;">Shown once, right after seeding — the team member uses this on the sign-in screen's "I have an access code" option. Not stored anywhere retrievable after this.</div>
+          <div class="field-hint" style="margin-top:2px;">Shown once — copy it now. Getting a new one below immediately stops this one from working.</div>
         </div>
+        <button type="button" id="getMemberCodeBtn" class="secondary-btn" style="margin-top:10px;">Get a fresh access code</button>
       </div>
       <div class="spin-note hidden" id="demoBusyNote">Working…</div>
       <div id="demoError" class="error hidden"></div>
@@ -631,6 +632,7 @@
   const demoMemberEmail = document.getElementById("demoMemberEmail");
   const demoMemberCodeRow = document.getElementById("demoMemberCodeRow");
   const demoMemberCode = document.getElementById("demoMemberCode");
+  const getMemberCodeBtn = document.getElementById("getMemberCodeBtn");
   const demoBusyNote = document.getElementById("demoBusyNote");
   const demoError = document.getElementById("demoError");
   const demoSavedMsg = document.getElementById("demoSavedMsg");
@@ -775,6 +777,7 @@
     openDemoBtn.disabled = !seeded || !!(ownerRow && ownerRow.disabled);
     wipeDemoDataBtn.disabled = !seeded;
     deleteDemoUsersBtn.disabled = !seeded;
+    getMemberCodeBtn.disabled = !seeded;
 
     if (seeded && ownerRow.disabled) {
       disableDemoBtn.classList.add("hidden");
@@ -820,7 +823,7 @@
   async function withDemoBusy(fn) {
     demoError.classList.add("hidden");
     demoSavedMsg.classList.add("hidden");
-    [seedDemoBtn, openDemoBtn, disableDemoBtn, enableDemoBtn, wipeDemoDataBtn, deleteDemoUsersBtn].forEach((b) => { b.disabled = true; });
+    [seedDemoBtn, openDemoBtn, disableDemoBtn, enableDemoBtn, wipeDemoDataBtn, deleteDemoUsersBtn, getMemberCodeBtn].forEach((b) => { b.disabled = true; });
     demoBusyNote.classList.remove("hidden");
     try {
       await fn();
@@ -857,6 +860,19 @@
       demoMemberCodeRow.classList.add("hidden");
     }
     showDemoSaved(data.created ? "Demo data seeded." : "Demo data already exists — reusing it.");
+  }));
+
+  getMemberCodeBtn.addEventListener("click", () => withDemoBusy(async () => {
+    const res = await fetch(`${API_BASE}/admin/demo/member-code`, { method: "POST", headers: { Authorization: `Bearer ${adminToken}` } });
+    if (res.status === 401) {
+      signOut();
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not get an access code for the demo team member.");
+    demoMemberCode.textContent = data.access_code;
+    demoMemberCodeRow.classList.remove("hidden");
+    showDemoSaved("New access code issued — the old one (if any) just stopped working.");
   }));
 
   openDemoBtn.addEventListener("click", () => withDemoBusy(async () => {

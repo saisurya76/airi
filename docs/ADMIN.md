@@ -355,9 +355,19 @@ role just defaults to the workspace admin.
   if the demo owner already owns a workspace, it's reused rather than
   duplicated (`{"created": false, ...}`), and no new member access code
   is issued in that case (see below). A fresh seed returns
-  `member_access_code` once — write it down or use "Open demo session"
-  before doing anything else, since it isn't recoverable afterward
-  (only its hash is stored, same as any real access code).
+  `member_access_code` once — write it down or use "Get a fresh access
+  code" any time afterward, since it isn't recoverable otherwise (only
+  its hash is stored, same as any real access code).
+- **Get a fresh access code** — `POST /admin/demo/member-code`. A thin
+  admin-password-gated wrapper around the exact same path a real
+  workspace admin already has (`POST
+  /workspaces/{id}/members/{member_id}/regenerate-code`) — it looks up
+  the demo workspace and the demo team member inside it, then issues a
+  new code the same way. Exists so the code is recoverable from the
+  admin page itself at any time, not just in the one moment right after
+  a fresh seed — issuing a new one immediately invalidates whatever
+  code was there before, same as the real endpoint. `400` if there's no
+  demo workspace or demo member yet (seed first).
 - **Open demo session** — `POST /admin/demo/login`. Mints a real
   session JWT for the demo owner directly (`create_session_token`) and
   opens `app.html` in a new tab with it — no OTP round trip, since
